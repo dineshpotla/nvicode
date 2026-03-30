@@ -1,0 +1,49 @@
+{
+  "name": "nvicode",
+  "version": "0.1.0",
+  "description": "Run Claude Code through NVIDIA-hosted models using a local Anthropic-compatible gateway.",
+  "author": "Dinesh Potla",
+  "keywords": [
+    "claude-code",
+    "nvidia",
+    "kimi",
+    "qwen",
+    "glm",
+    "gateway",
+    "cli"
+  ],
+  "type": "module",
+  "bin": {
+    "nvicode": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/cli.ts"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dineshpotla/nvicode.git"
+  },
+  "homepage": "https://github.com/dineshpotla/nvicode#readme",
+  "bugs": {
+    "url": "https://github.com/dineshpotla/nvicode/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.8",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.2"
+  }
+}
