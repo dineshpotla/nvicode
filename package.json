@@ -1,6 +1,6 @@
 {
   "name": "nvicode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run Claude Code through NVIDIA-hosted models using a local Anthropic-compatible gateway.",
   "author": "Dinesh Potla",
   "keywords": [
