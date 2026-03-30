@@ -30,17 +30,17 @@ nvicode launch claude
 
 ## Screenshots
 
-### Browse models
+### Save your API key
 
-![Model catalog](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/models.png)
+![nvicode auth](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/auth.png)
 
-### Check saved settings
+### Choose a model
 
-![Saved config](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/config.png)
+![nvicode select model](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/select-model.png)
 
-### Verify the launch path
+### Launch Claude Code through NVIDIA
 
-![Launch path](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/launch.png)
+![nvicode launch claude](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/launch.png)
 
 ## Commands
 

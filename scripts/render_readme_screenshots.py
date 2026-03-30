@@ -126,11 +126,23 @@ def render_terminal_card(
 
 def main() -> None:
     render_terminal_card(
-        title="Model catalog",
-        subtitle="Pick a supported coding model before launching Claude Code",
-        filename="models.png",
+        title="nvicode auth",
+        subtitle="Save a NVIDIA API key once, then reuse it for future launches",
+        filename="auth.png",
         body=(
-            "$ nvicode models\n"
+            "$ nvicode auth\n"
+            "Enter NVIDIA API key: nvapi-************************************\n"
+            "Saved API key to ~/.local/share/nvicode/config.json\n"
+            "Ready to launch Claude Code through NVIDIA."
+        ),
+    )
+
+    render_terminal_card(
+        title="nvicode select model",
+        subtitle="Choose the backend model Claude Code should use",
+        filename="select-model.png",
+        body=(
+            "$ nvicode select model\n"
             "1. Kimi K2.5\n"
             "   moonshotai/kimi-k2.5\n"
             "   Strong coding and agentic workflow model.\n"
@@ -148,35 +160,23 @@ def main() -> None:
             "   Compact coding-specialized model.\n"
             "6. Qwen2.5 Coder 32B\n"
             "   qwen/qwen2.5-coder-32b-instruct\n"
-            "   Smaller coding-focused Qwen model."
+            "   Smaller coding-focused Qwen model.\n"
+            "Enter choice number: 1\n"
+            "Saved model moonshotai/kimi-k2.5"
         ),
     )
 
     render_terminal_card(
-        title="Saved config",
-        subtitle="nvicode stores model and proxy settings locally",
-        filename="config.png",
-        body=(
-            "$ nvicode config\n"
-            "Config file: ~/.local/share/nvicode/config.json\n"
-            "State dir:   ~/.local/state/nvicode\n"
-            "Model:       moonshotai/kimi-k2.5\n"
-            "Proxy port:  8788\n"
-            "Thinking:    off\n"
-            "API key:     saved"
-        ),
-    )
-
-    render_terminal_card(
-        title="Launch path",
-        subtitle="Claude Code runs through the local gateway, then NVIDIA",
+        title="nvicode launch claude",
+        subtitle="Launch Claude Code with the local gateway pointed at NVIDIA",
         filename="launch.png",
         body=(
-            '$ nvicode launch claude -p "Reply with exactly OK"\n'
-            "OK\n"
+            "$ nvicode launch claude\n"
+            "Starting local gateway on 127.0.0.1:8788\n"
+            "Using model moonshotai/kimi-k2.5\n"
+            "Launching Claude Code with NVIDIA backend...\n"
             "\n"
-            "$ curl -s http://127.0.0.1:8788/health\n"
-            '{"ok":true,"model":"moonshotai/kimi-k2.5","port":8788,"thinking":false}'
+            "Claude Code opens here."
         ),
     )
 
