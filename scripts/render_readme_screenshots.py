@@ -127,22 +127,22 @@ def render_terminal_card(
 def main() -> None:
     render_terminal_card(
         title="nvicode auth",
-        subtitle="Save a NVIDIA API key once, then reuse it for future launches",
+        subtitle="Actual first-run prompt and save confirmation",
         filename="auth.png",
         body=(
             "$ nvicode auth\n"
-            "Enter NVIDIA API key: nvapi-************************************\n"
-            "Saved API key to ~/.local/share/nvicode/config.json\n"
-            "Ready to launch Claude Code through NVIDIA."
+            "NVIDIA API key: nvapi-example-readme-key\n"
+            "Saved NVIDIA API key."
         ),
     )
 
     render_terminal_card(
         title="nvicode select model",
-        subtitle="Choose the backend model Claude Code should use",
+        subtitle="Actual interactive model picker output",
         filename="select-model.png",
         body=(
             "$ nvicode select model\n"
+            "Recommended NVIDIA coding models:\n"
             "1. Kimi K2.5\n"
             "   moonshotai/kimi-k2.5\n"
             "   Strong coding and agentic workflow model.\n"
@@ -161,22 +161,32 @@ def main() -> None:
             "6. Qwen2.5 Coder 32B\n"
             "   qwen/qwen2.5-coder-32b-instruct\n"
             "   Smaller coding-focused Qwen model.\n"
-            "Enter choice number: 1\n"
-            "Saved model moonshotai/kimi-k2.5"
+            "Type a number from the list or enter a custom model id.\n"
+            "Model selection: 1\n"
+            "Saved model: moonshotai/kimi-k2.5"
         ),
     )
 
     render_terminal_card(
         title="nvicode launch claude",
-        subtitle="Launch Claude Code with the local gateway pointed at NVIDIA",
+        subtitle="Actual Claude Code status after launching through nvicode",
         filename="launch.png",
         body=(
             "$ nvicode launch claude\n"
-            "Starting local gateway on 127.0.0.1:8788\n"
-            "Using model moonshotai/kimi-k2.5\n"
-            "Launching Claude Code with NVIDIA backend...\n"
+            "Claude Code v2.1.87\n"
             "\n"
-            "Claude Code opens here."
+            "❯ /status\n"
+            "Status   Config   Usage\n"
+            "\n"
+            "Version: 2.1.87\n"
+            "Session name: /rename to add a name\n"
+            "Session ID: 2c9d288b-98b0-4fde-ba25-533bfd06f53e\n"
+            "cwd: ~/project\n"
+            "Auth token: ANTHROPIC_AUTH_TOKEN\n"
+            "Anthropic base URL: http://127.0.0.1:8788\n"
+            "\n"
+            "Model: moonshotai/kimi-k2.5\n"
+            "Setting sources: User settings"
         ),
     )
 

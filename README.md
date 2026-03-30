@@ -12,6 +12,8 @@ npm install -g nvicode
 
 Save your NVIDIA API key:
 
+Get a free key from [NVIDIA Build API Keys](https://build.nvidia.com/settings/api-keys).
+
 ```sh
 nvicode auth
 ```
