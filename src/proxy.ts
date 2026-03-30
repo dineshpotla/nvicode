@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  appendUsageRecord,
+  buildUsageRecord,
+  getPricingSnapshot,
+} from "./usage.js";
 import type { NvicodeConfig } from "./config.js";
 
 interface AnthropicTextBlock {
@@ -114,6 +119,56 @@ interface OpenAIResponse {
 }
 
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const DEFAULT_RETRY_DELAY_MS = 2_000;
+const MAX_NVIDIA_RETRIES = 3;
+
+const sleep = async (ms: number): Promise<void> => {
+  if (ms <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+const parseRetryAfterMs = (value: string | null): number | null => {
+  if (!value) {
+    return null;
+  }
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds * 1000);
+  }
+
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+
+  return Math.max(0, timestamp - Date.now());
+};
+
+const createRequestScheduler = (maxRequestsPerMinute: number) => {
+  const intervalMs = Math.max(1, Math.ceil(60_000 / maxRequestsPerMinute));
+  let nextAvailableAt = 0;
+  let queue = Promise.resolve();
+
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    const runTask = async (): Promise<T> => {
+      const now = Date.now();
+      const scheduledAt = Math.max(now, nextAvailableAt);
+      nextAvailableAt = scheduledAt + intervalMs;
+      await sleep(scheduledAt - now);
+      return task();
+    };
+
+    const result = queue.then(runTask, runTask);
+    queue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+};
 
 const sendJson = (
   response: ServerResponse,
@@ -473,17 +528,23 @@ const estimateTokens = (payload: unknown): number => {
   return Math.max(1, Math.ceil(raw.length / 4));
 };
 
+const resolveTargetModel = (
+  config: NvicodeConfig,
+  payload: AnthropicMessagesRequest,
+): string =>
+  payload.model && payload.model.includes("/") && !payload.model.startsWith("claude-")
+    ? payload.model
+    : config.model;
+
 const callNvidia = async (
   config: NvicodeConfig,
+  scheduleRequest: <T>(task: () => Promise<T>) => Promise<T>,
   payload: AnthropicMessagesRequest,
 ): Promise<{
   targetModel: string;
   upstream: OpenAIResponse;
 }> => {
-  const targetModel =
-    payload.model && payload.model.includes("/") && !payload.model.startsWith("claude-")
-      ? payload.model
-      : config.model;
+  const targetModel = resolveTargetModel(config, payload);
 
   const requestBody: Record<string, unknown> = {
     model: targetModel,
@@ -518,28 +579,45 @@ const callNvidia = async (
     };
   }
 
-  const response = await fetch(NVIDIA_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const invoke = async (): Promise<OpenAIResponse> => {
+    for (let attempt = 0; attempt <= MAX_NVIDIA_RETRIES; attempt += 1) {
+      const response = await fetch(NVIDIA_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
 
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`NVIDIA API HTTP ${response.status}: ${raw}`);
-  }
+      const raw = await response.text();
+      if (response.ok) {
+        return JSON.parse(raw) as OpenAIResponse;
+      }
+
+      if (response.status === 429 && attempt < MAX_NVIDIA_RETRIES) {
+        const retryAfterMs =
+          parseRetryAfterMs(response.headers.get("retry-after")) ||
+          DEFAULT_RETRY_DELAY_MS * 2 ** attempt;
+        await sleep(retryAfterMs);
+        continue;
+      }
+
+      throw new Error(`NVIDIA API HTTP ${response.status}: ${raw}`);
+    }
+
+    throw new Error("NVIDIA API retry loop exhausted unexpectedly.");
+  };
 
   return {
     targetModel,
-    upstream: JSON.parse(raw) as OpenAIResponse,
+    upstream: await scheduleRequest(invoke),
   };
 };
 
 export const createProxyServer = (config: NvicodeConfig): Server => {
+  const scheduleNvidiaRequest = createRequestScheduler(config.maxRequestsPerMinute);
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url || "/", "http://127.0.0.1");
@@ -556,6 +634,7 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
           model: config.model,
           port: config.proxyPort,
           thinking: config.thinking,
+          maxRequestsPerMinute: config.maxRequestsPerMinute,
         });
         return;
       }
@@ -587,126 +666,163 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
       if (request.method === "POST" && url.pathname === "/v1/messages") {
         const rawBody = await readRequestBody(request);
         const payload = JSON.parse(rawBody) as AnthropicMessagesRequest;
-        const { upstream, targetModel } = await callNvidia(config, payload);
-        const choice = upstream.choices?.[0];
-        const mappedContent = mapResponseContent(choice);
-
-        const anthropicResponse = {
-          id: upstream.id || `msg_${randomUUID()}`,
-          type: "message",
-          role: "assistant",
-          model: targetModel,
-          content: mappedContent,
-          stop_reason: mapStopReason(choice?.finish_reason),
-          stop_sequence: null,
-          usage: {
-            input_tokens:
-              upstream.usage?.prompt_tokens ??
-              estimateTokens({
-                system: payload.system ?? null,
-                messages: payload.messages ?? [],
-                tools: payload.tools ?? [],
-              }),
-            output_tokens: upstream.usage?.completion_tokens ?? 0,
-          },
-        };
-
-        if (!payload.stream) {
-          sendJson(response, 200, anthropicResponse);
-          return;
-        }
-
-        response.writeHead(200, {
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-          "Content-Type": "text/event-stream",
+        const targetModel = resolveTargetModel(config, payload);
+        const estimatedInputTokens = estimateTokens({
+          system: payload.system ?? null,
+          messages: payload.messages ?? [],
+          tools: payload.tools ?? [],
         });
+        const startedAt = Date.now();
+        const pricing = getPricingSnapshot();
 
-        writeSse(response, "message_start", {
-          type: "message_start",
-          message: {
-            ...anthropicResponse,
-            content: [],
-            stop_reason: null,
+        try {
+          const { upstream } = await callNvidia(
+            config,
+            scheduleNvidiaRequest,
+            payload,
+          );
+          const choice = upstream.choices?.[0];
+          const mappedContent = mapResponseContent(choice);
+
+          const anthropicResponse = {
+            id: upstream.id || `msg_${randomUUID()}`,
+            type: "message",
+            role: "assistant",
+            model: targetModel,
+            content: mappedContent,
+            stop_reason: mapStopReason(choice?.finish_reason),
+            stop_sequence: null,
             usage: {
-              input_tokens: anthropicResponse.usage.input_tokens,
-              output_tokens: 0,
+              input_tokens: upstream.usage?.prompt_tokens ?? estimatedInputTokens,
+              output_tokens: upstream.usage?.completion_tokens ?? 0,
             },
-          },
-        });
+          };
 
-        mappedContent.forEach((block, index) => {
-          if (block.type === "text") {
-            writeSse(response, "content_block_start", {
-              type: "content_block_start",
-              index,
-              content_block: {
-                type: "text",
-                text: "",
+          await appendUsageRecord(
+            buildUsageRecord({
+              id: anthropicResponse.id,
+              status: "success",
+              model: targetModel,
+              inputTokens: anthropicResponse.usage.input_tokens,
+              outputTokens: anthropicResponse.usage.output_tokens,
+              latencyMs: Date.now() - startedAt,
+              stopReason: anthropicResponse.stop_reason,
+              pricing,
+            }),
+          );
+
+          if (!payload.stream) {
+            sendJson(response, 200, anthropicResponse);
+            return;
+          }
+
+          response.writeHead(200, {
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            "Content-Type": "text/event-stream",
+          });
+
+          writeSse(response, "message_start", {
+            type: "message_start",
+            message: {
+              ...anthropicResponse,
+              content: [],
+              stop_reason: null,
+              usage: {
+                input_tokens: anthropicResponse.usage.input_tokens,
+                output_tokens: 0,
               },
-            });
+            },
+          });
 
-            for (const chunk of chunkText(block.text)) {
+          mappedContent.forEach((block, index) => {
+            if (block.type === "text") {
+              writeSse(response, "content_block_start", {
+                type: "content_block_start",
+                index,
+                content_block: {
+                  type: "text",
+                  text: "",
+                },
+              });
+
+              for (const chunk of chunkText(block.text)) {
+                writeSse(response, "content_block_delta", {
+                  type: "content_block_delta",
+                  index,
+                  delta: {
+                    type: "text_delta",
+                    text: chunk,
+                  },
+                });
+              }
+
+              writeSse(response, "content_block_stop", {
+                type: "content_block_stop",
+                index,
+              });
+              return;
+            }
+
+            if (block.type === "tool_use") {
+              writeSse(response, "content_block_start", {
+                type: "content_block_start",
+                index,
+                content_block: {
+                  type: "tool_use",
+                  id: block.id,
+                  name: block.name,
+                  input: {},
+                },
+              });
+
               writeSse(response, "content_block_delta", {
                 type: "content_block_delta",
                 index,
                 delta: {
-                  type: "text_delta",
-                  text: chunk,
+                  type: "input_json_delta",
+                  partial_json: JSON.stringify(block.input ?? {}),
                 },
               });
+
+              writeSse(response, "content_block_stop", {
+                type: "content_block_stop",
+                index,
+              });
             }
+          });
 
-            writeSse(response, "content_block_stop", {
-              type: "content_block_stop",
-              index,
-            });
-            return;
-          }
-
-          if (block.type === "tool_use") {
-            writeSse(response, "content_block_start", {
-              type: "content_block_start",
-              index,
-              content_block: {
-                type: "tool_use",
-                id: block.id,
-                name: block.name,
-                input: {},
-              },
-            });
-
-            writeSse(response, "content_block_delta", {
-              type: "content_block_delta",
-              index,
-              delta: {
-                type: "input_json_delta",
-                partial_json: JSON.stringify(block.input ?? {}),
-              },
-            });
-
-            writeSse(response, "content_block_stop", {
-              type: "content_block_stop",
-              index,
-            });
-          }
-        });
-
-        writeSse(response, "message_delta", {
-          type: "message_delta",
-          delta: {
-            stop_reason: anthropicResponse.stop_reason,
-            stop_sequence: null,
-          },
-          usage: {
-            output_tokens: anthropicResponse.usage.output_tokens,
-          },
-        });
-        writeSse(response, "message_stop", {
-          type: "message_stop",
-        });
-        response.end();
-        return;
+          writeSse(response, "message_delta", {
+            type: "message_delta",
+            delta: {
+              stop_reason: anthropicResponse.stop_reason,
+              stop_sequence: null,
+            },
+            usage: {
+              output_tokens: anthropicResponse.usage.output_tokens,
+            },
+          });
+          writeSse(response, "message_stop", {
+            type: "message_stop",
+          });
+          response.end();
+          return;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await appendUsageRecord(
+            buildUsageRecord({
+              id: `err_${randomUUID()}`,
+              status: "error",
+              model: targetModel,
+              inputTokens: estimatedInputTokens,
+              outputTokens: 0,
+              latencyMs: Date.now() - startedAt,
+              error: message,
+              pricing,
+            }),
+          );
+          throw error;
+        }
       }
 
       sendAnthropicError(

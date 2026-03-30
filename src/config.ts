@@ -9,6 +9,7 @@ export interface NvicodeConfig {
   proxyPort: number;
   proxyToken: string;
   thinking: boolean;
+  maxRequestsPerMinute: number;
 }
 
 type PartialConfig = Partial<NvicodeConfig>;
@@ -19,16 +20,62 @@ export interface NvicodePaths {
   stateDir: string;
   logFile: string;
   pidFile: string;
+  usageLogFile: string;
 }
 
 const DEFAULT_PROXY_PORT = 8788;
 const DEFAULT_MODEL = "moonshotai/kimi-k2.5";
+const DEFAULT_MAX_REQUESTS_PER_MINUTE = 40;
+
+const getEnvNumber = (name: string): number | null => {
+  const raw = process.env[name];
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.floor(parsed);
+};
+
+const getDefaultConfigHome = (): string => {
+  if (process.env.XDG_CONFIG_HOME) {
+    return process.env.XDG_CONFIG_HOME;
+  }
+
+  if (process.platform === "win32") {
+    return (
+      process.env.APPDATA ||
+      process.env.LOCALAPPDATA ||
+      path.join(os.homedir(), ".local", "share")
+    );
+  }
+
+  return path.join(os.homedir(), ".local", "share");
+};
+
+const getDefaultStateHome = (): string => {
+  if (process.env.XDG_STATE_HOME) {
+    return process.env.XDG_STATE_HOME;
+  }
+
+  if (process.platform === "win32") {
+    return (
+      process.env.LOCALAPPDATA ||
+      process.env.APPDATA ||
+      path.join(os.homedir(), ".local", "state")
+    );
+  }
+
+  return path.join(os.homedir(), ".local", "state");
+};
 
 export const getNvicodePaths = (): NvicodePaths => {
-  const configHome =
-    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".local", "share");
-  const stateHome =
-    process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+  const configHome = getDefaultConfigHome();
+  const stateHome = getDefaultStateHome();
 
   const configDir = path.join(configHome, "nvicode");
   const stateDir = path.join(stateHome, "nvicode");
@@ -39,19 +86,30 @@ export const getNvicodePaths = (): NvicodePaths => {
     stateDir,
     logFile: path.join(stateDir, "proxy.log"),
     pidFile: path.join(stateDir, "proxy.pid"),
+    usageLogFile: path.join(stateDir, "usage.jsonl"),
   };
 };
 
-const withDefaults = (config: PartialConfig): NvicodeConfig => ({
-  apiKey: config.apiKey?.trim() || "",
-  model: config.model?.trim() || DEFAULT_MODEL,
-  proxyPort:
-    Number.isInteger(config.proxyPort) && (config.proxyPort as number) > 0
-      ? (config.proxyPort as number)
-      : DEFAULT_PROXY_PORT,
-  proxyToken: config.proxyToken?.trim() || randomUUID(),
-  thinking: config.thinking ?? false,
-});
+const withDefaults = (config: PartialConfig): NvicodeConfig => {
+  const envMaxRequestsPerMinute = getEnvNumber("NVICODE_MAX_RPM");
+
+  return {
+    apiKey: config.apiKey?.trim() || "",
+    model: config.model?.trim() || DEFAULT_MODEL,
+    proxyPort:
+      Number.isInteger(config.proxyPort) && (config.proxyPort as number) > 0
+        ? (config.proxyPort as number)
+        : DEFAULT_PROXY_PORT,
+    proxyToken: config.proxyToken?.trim() || randomUUID(),
+    thinking: config.thinking ?? false,
+    maxRequestsPerMinute:
+      envMaxRequestsPerMinute ||
+      (Number.isInteger(config.maxRequestsPerMinute) &&
+      (config.maxRequestsPerMinute as number) > 0
+        ? (config.maxRequestsPerMinute as number)
+        : DEFAULT_MAX_REQUESTS_PER_MINUTE),
+  };
+};
 
 export const loadConfig = async (): Promise<NvicodeConfig> => {
   const paths = getNvicodePaths();

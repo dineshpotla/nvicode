@@ -16,6 +16,15 @@ import {
 } from "./config.js";
 import { createProxyServer } from "./proxy.js";
 import { CURATED_MODELS, getRecommendedModels } from "./models.js";
+import {
+  filterRecordsSince,
+  formatDuration,
+  formatInteger,
+  formatTimestamp,
+  formatUsd,
+  readUsageRecords,
+  summarizeUsage,
+} from "./usage.js";
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -27,10 +36,30 @@ Commands:
   nvicode models              Show recommended coding models
   nvicode auth                Save or update NVIDIA API key
   nvicode config              Show current nvicode config
+  nvicode usage               Show token usage and cost comparison
+  nvicode activity            Show recent request activity
+  nvicode dashboard           Show usage summary and recent activity
   nvicode launch claude [...] Launch Claude Code through nvicode
   nvicode serve               Run the local proxy in the foreground
 `);
 };
+
+const isWindows = process.platform === "win32";
+
+const getPathExts = (): string[] => {
+  if (!isWindows) {
+    return [""];
+  }
+
+  const raw = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD";
+  return raw
+    .split(";")
+    .map((ext) => ext.trim())
+    .filter(Boolean)
+    .map((ext) => ext.toLowerCase());
+};
+
+const unique = <T>(values: T[]): T[] => [...new Set(values)];
 
 const question = async (prompt: string): Promise<string> => {
   const rl = createInterface({
@@ -141,10 +170,119 @@ const runConfig = async (): Promise<void> => {
   const paths = getNvicodePaths();
   console.log(`Config file: ${paths.configFile}`);
   console.log(`State dir:   ${paths.stateDir}`);
+  console.log(`Usage log:   ${paths.usageLogFile}`);
   console.log(`Model:       ${config.model}`);
   console.log(`Proxy port:  ${config.proxyPort}`);
+  console.log(`Max RPM:     ${config.maxRequestsPerMinute}`);
   console.log(`Thinking:    ${config.thinking ? "on" : "off"}`);
   console.log(`API key:     ${config.apiKey ? "saved" : "missing"}`);
+};
+
+const printUsageBlock = (
+  label: string,
+  records: Awaited<ReturnType<typeof readUsageRecords>>,
+): void => {
+  const summary = summarizeUsage(records);
+  console.log(label);
+  console.log(
+    `Requests: ${formatInteger(summary.requests)} (${formatInteger(summary.successes)} ok, ${formatInteger(summary.errors)} error)`,
+  );
+  console.log(`Input tokens: ${formatInteger(summary.inputTokens)}`);
+  console.log(`Output tokens: ${formatInteger(summary.outputTokens)}`);
+  console.log(`NVIDIA cost: ${formatUsd(summary.providerCostUsd)}`);
+  console.log(`Opus 4.6 equivalent: ${formatUsd(summary.compareCostUsd)}`);
+  console.log(`Estimated savings: ${formatUsd(summary.savingsUsd)}`);
+};
+
+const runUsage = async (): Promise<void> => {
+  const records = await readUsageRecords();
+  if (records.length === 0) {
+    console.log("No usage recorded yet.");
+    return;
+  }
+
+  const now = Date.now();
+  const latestPricing = records[0]?.pricing;
+  if (latestPricing) {
+    console.log("Pricing basis:");
+    console.log(
+      `- NVIDIA configured cost: ${formatUsd(latestPricing.providerInputUsdPerMTok)} / MTok input, ${formatUsd(latestPricing.providerOutputUsdPerMTok)} / MTok output`,
+    );
+    console.log(
+      `- ${latestPricing.compareModel}: ${formatUsd(latestPricing.compareInputUsdPerMTok)} / MTok input, ${formatUsd(latestPricing.compareOutputUsdPerMTok)} / MTok output`,
+    );
+    console.log(
+      `- Comparison source: ${latestPricing.comparePricingSource} (${latestPricing.comparePricingUpdatedAt})`,
+    );
+    console.log("");
+  }
+
+  const windows = [
+    { label: "Last 1 hour", durationMs: 1 * 60 * 60 * 1000 },
+    { label: "Last 6 hours", durationMs: 6 * 60 * 60 * 1000 },
+    { label: "Last 12 hours", durationMs: 12 * 60 * 60 * 1000 },
+    { label: "Last 1 day", durationMs: 24 * 60 * 60 * 1000 },
+    { label: "Last 1 week", durationMs: 7 * 24 * 60 * 60 * 1000 },
+    { label: "Last 1 month", durationMs: 30 * 24 * 60 * 60 * 1000 },
+  ];
+
+  const rows = windows.map((window) => {
+    const summary = summarizeUsage(filterRecordsSince(records, now - window.durationMs));
+    return {
+      window: window.label,
+      requests: `${formatInteger(summary.requests)} (${formatInteger(summary.successes)} ok/${formatInteger(summary.errors)} err)`,
+      inputTokens: formatInteger(summary.inputTokens),
+      outputTokens: formatInteger(summary.outputTokens),
+      nvidiaCost: formatUsd(summary.providerCostUsd),
+      savings: formatUsd(summary.savingsUsd),
+    };
+  });
+
+  console.log(
+    "Window        Requests         Input Tok  Output Tok  NVIDIA      Saved",
+  );
+  rows.forEach((row) => {
+    console.log(
+      `${row.window.padEnd(13)} ${row.requests.padEnd(16)} ${row.inputTokens.padStart(10)} ${row.outputTokens.padStart(11)} ${row.nvidiaCost.padStart(10)} ${row.savings.padStart(10)}`,
+    );
+  });
+};
+
+const runActivity = async (): Promise<void> => {
+  const records = await readUsageRecords();
+  if (records.length === 0) {
+    console.log("No activity recorded yet.");
+    return;
+  }
+
+  console.log(
+    "Timestamp             Status  Model                           In Tok  Out Tok  Latency  NVIDIA     Saved",
+  );
+  for (const record of records.slice(0, 15)) {
+    const model = record.model.length > 30 ? `${record.model.slice(0, 27)}...` : record.model;
+    const status = record.status === "success" ? "ok" : "error";
+    console.log(
+      `${formatTimestamp(record.timestamp).padEnd(21)} ${status.padEnd(6)} ${model.padEnd(31)} ${formatInteger(record.inputTokens).padStart(7)} ${formatInteger(record.outputTokens).padStart(8)} ${formatDuration(record.latencyMs).padStart(8)} ${formatUsd(record.providerCostUsd).padStart(10)} ${formatUsd(record.savingsUsd).padStart(10)}`,
+    );
+    if (record.error) {
+      console.log(`  error: ${record.error}`);
+    }
+  }
+};
+
+const runDashboard = async (): Promise<void> => {
+  const records = await readUsageRecords();
+  if (records.length === 0) {
+    console.log("No usage recorded yet.");
+    return;
+  }
+
+  const last7Days = filterRecordsSince(records, Date.now() - 7 * 24 * 60 * 60 * 1000);
+  printUsageBlock("Usage (7d)", last7Days);
+  console.log("");
+  console.log("Recent activity");
+  console.log("");
+  await runActivity();
 };
 
 const waitForHealthyProxy = async (port: number): Promise<boolean> => {
@@ -177,6 +315,7 @@ const ensureProxyRunning = async (config: NvicodeConfig): Promise<void> => {
       ...process.env,
     },
     stdio: ["ignore", logFd, logFd],
+    windowsHide: true,
   });
   child.unref();
 
@@ -189,17 +328,71 @@ const ensureProxyRunning = async (config: NvicodeConfig): Promise<void> => {
 
 const isExecutable = async (filePath: string): Promise<boolean> => {
   try {
-    await fs.access(filePath, constants.X_OK);
+    await fs.access(filePath, isWindows ? constants.F_OK : constants.X_OK);
     return true;
   } catch {
     return false;
   }
 };
 
+const buildExecutableCandidates = (entry: string, name: string): string[] => {
+  const base = path.join(entry, name);
+  if (!isWindows) {
+    return [base];
+  }
+
+  if (path.extname(name)) {
+    return [base];
+  }
+
+  return unique([base, ...getPathExts().map((ext) => `${base}${ext}`)]);
+};
+
+const resolveClaudeVersionEntry = async (entryPath: string): Promise<string | null> => {
+  if (await isExecutable(entryPath)) {
+    return entryPath;
+  }
+
+  const nestedCandidates = isWindows
+    ? ["claude.exe", "claude.cmd", "claude.bat", "claude"]
+    : ["claude"];
+
+  for (const candidateName of nestedCandidates) {
+    const candidate = path.join(entryPath, candidateName);
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
 const resolveClaudeBinary = async (): Promise<string> => {
-  const nativeInPath = await findExecutableInPath("claude-native");
-  if (nativeInPath) {
-    return nativeInPath;
+  const nativeNames = isWindows
+    ? ["claude-native.exe", "claude-native.cmd", "claude-native.bat", "claude-native"]
+    : ["claude-native"];
+  for (const name of nativeNames) {
+    const nativeInPath = await findExecutableInPath(name);
+    if (nativeInPath) {
+      return nativeInPath;
+    }
+  }
+
+  const homeBinCandidates = isWindows
+    ? [
+        path.join(os.homedir(), ".local", "bin", "claude.exe"),
+        path.join(os.homedir(), ".local", "bin", "claude.cmd"),
+        path.join(os.homedir(), ".local", "bin", "claude.bat"),
+        path.join(os.homedir(), ".local", "bin", "claude"),
+      ]
+    : [
+        path.join(os.homedir(), ".local", "bin", "claude-native"),
+        path.join(os.homedir(), ".local", "bin", "claude"),
+      ];
+  for (const candidate of homeBinCandidates) {
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
   }
 
   const versionsDir = path.join(os.homedir(), ".local", "share", "claude", "versions");
@@ -212,15 +405,23 @@ const resolveClaudeBinary = async (): Promise<string> => {
       }),
     ).at(-1);
     if (latest) {
-      return path.join(versionsDir, latest);
+      const resolved = await resolveClaudeVersionEntry(path.join(versionsDir, latest));
+      if (resolved) {
+        return resolved;
+      }
     }
   } catch {
     // continue
   }
 
-  const claudeInPath = await findExecutableInPath("claude");
-  if (claudeInPath) {
-    return claudeInPath;
+  const cliNames = isWindows
+    ? ["claude.exe", "claude.cmd", "claude.bat", "claude"]
+    : ["claude"];
+  for (const name of cliNames) {
+    const claudeInPath = await findExecutableInPath(name);
+    if (claudeInPath) {
+      return claudeInPath;
+    }
   }
 
   throw new Error("Unable to locate Claude Code binary.");
@@ -232,12 +433,34 @@ const findExecutableInPath = async (name: string): Promise<string | null> => {
     if (!entry) {
       continue;
     }
-    const candidate = path.join(entry, name);
-    if (await isExecutable(candidate)) {
-      return candidate;
+    for (const candidate of buildExecutableCandidates(entry, name)) {
+      if (await isExecutable(candidate)) {
+        return candidate;
+      }
     }
   }
   return null;
+};
+
+const spawnClaudeProcess = (
+  claudeBinary: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+) => {
+  if (isWindows && /\.(cmd|bat)$/i.test(claudeBinary)) {
+    return spawn(claudeBinary, args, {
+      stdio: "inherit",
+      env,
+      shell: true,
+      windowsHide: true,
+    });
+  }
+
+  return spawn(claudeBinary, args, {
+    stdio: "inherit",
+    env,
+    windowsHide: true,
+  });
 };
 
 const runLaunchClaude = async (args: string[]): Promise<void> => {
@@ -245,20 +468,17 @@ const runLaunchClaude = async (args: string[]): Promise<void> => {
   await ensureProxyRunning(config);
   const claudeBinary = await resolveClaudeBinary();
 
-  const child = spawn(claudeBinary, args, {
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      ANTHROPIC_BASE_URL: `http://127.0.0.1:${config.proxyPort}`,
-      ANTHROPIC_AUTH_TOKEN: config.proxyToken,
-      ANTHROPIC_API_KEY: "",
-      ANTHROPIC_MODEL: config.model,
-      CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
-      ANTHROPIC_CUSTOM_MODEL_OPTION: config.model,
-      ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "nvicode custom model",
-      ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION:
-        "Claude Code via local NVIDIA gateway",
-    },
+  const child = spawnClaudeProcess(claudeBinary, args, {
+    ...process.env,
+    ANTHROPIC_BASE_URL: `http://127.0.0.1:${config.proxyPort}`,
+    ANTHROPIC_AUTH_TOKEN: config.proxyToken,
+    ANTHROPIC_API_KEY: "",
+    ANTHROPIC_MODEL: config.model,
+    CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+    ANTHROPIC_CUSTOM_MODEL_OPTION: config.model,
+    ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "nvicode custom model",
+    ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION:
+      "Claude Code via local NVIDIA gateway",
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -322,6 +542,21 @@ const main = async (): Promise<void> => {
 
   if (command === "config") {
     await runConfig();
+    return;
+  }
+
+  if (command === "usage") {
+    await runUsage();
+    return;
+  }
+
+  if (command === "activity") {
+    await runActivity();
+    return;
+  }
+
+  if (command === "dashboard") {
+    await runDashboard();
     return;
   }
 
