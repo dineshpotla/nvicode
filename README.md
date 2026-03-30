@@ -28,6 +28,20 @@ Launch Claude Code through NVIDIA:
 nvicode launch claude
 ```
 
+## Screenshots
+
+### Browse models
+
+![Model catalog](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/models.png)
+
+### Check saved settings
+
+![Saved config](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/config.png)
+
+### Verify the launch path
+
+![Launch path](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/launch.png)
+
 ## Commands
 
 Useful commands:
