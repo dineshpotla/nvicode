@@ -1,6 +1,6 @@
 {
   "name": "nvicode",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "NviCode - Introducing one click Nvidia/OpenRouter keys to Claude Code. Free Claude code.",
   "author": "Dinesh Potla",
   "keywords": [
@@ -19,6 +19,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
+    "postinstall": "node dist/postinstall.js",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/cli.ts"
   },

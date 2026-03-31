@@ -17,14 +17,17 @@ Install the published package:
 npm install -g nvicode
 ```
 
-Set up provider, key, and model:
-
-- NVIDIA: get a free key from [NVIDIA Build API Keys](https://build.nvidia.com/settings/api-keys)
-- OpenRouter: use your OpenRouter API key
+On interactive global installs, `nvicode` opens guided setup automatically.
+If you skip it, run:
 
 ```sh
 nvicode select model
 ```
+
+The setup flow asks for provider, API key, and model:
+
+- NVIDIA: get a free key from [NVIDIA Build API Keys](https://build.nvidia.com/settings/api-keys)
+- OpenRouter: use your OpenRouter API key
 
 Launch Claude Code through your selected provider:
 
