@@ -3,16 +3,24 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+export type ProviderId = "nvidia" | "openrouter";
+
 export interface NvicodeConfig {
-  apiKey: string;
-  model: string;
+  provider: ProviderId;
+  nvidiaApiKey: string;
+  nvidiaModel: string;
+  openrouterApiKey: string;
+  openrouterModel: string;
   proxyPort: number;
   proxyToken: string;
   thinking: boolean;
   maxRequestsPerMinute: number;
 }
 
-type PartialConfig = Partial<NvicodeConfig>;
+type PartialConfig = Partial<NvicodeConfig> & {
+  apiKey?: string;
+  model?: string;
+};
 
 export interface NvicodePaths {
   configDir: string;
@@ -24,7 +32,9 @@ export interface NvicodePaths {
 }
 
 const DEFAULT_PROXY_PORT = 8788;
-const DEFAULT_MODEL = "moonshotai/kimi-k2.5";
+const DEFAULT_PROVIDER: ProviderId = "nvidia";
+const DEFAULT_NVIDIA_MODEL = "moonshotai/kimi-k2.5";
+const DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6";
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 40;
 
 const getEnvNumber = (name: string): number | null => {
@@ -92,10 +102,15 @@ export const getNvicodePaths = (): NvicodePaths => {
 
 const withDefaults = (config: PartialConfig): NvicodeConfig => {
   const envMaxRequestsPerMinute = getEnvNumber("NVICODE_MAX_RPM");
+  const legacyApiKey = config.apiKey?.trim() || "";
+  const legacyModel = config.model?.trim() || DEFAULT_NVIDIA_MODEL;
 
   return {
-    apiKey: config.apiKey?.trim() || "",
-    model: config.model?.trim() || DEFAULT_MODEL,
+    provider: config.provider === "openrouter" ? "openrouter" : DEFAULT_PROVIDER,
+    nvidiaApiKey: config.nvidiaApiKey?.trim() || legacyApiKey,
+    nvidiaModel: config.nvidiaModel?.trim() || legacyModel,
+    openrouterApiKey: config.openrouterApiKey?.trim() || "",
+    openrouterModel: config.openrouterModel?.trim() || DEFAULT_OPENROUTER_MODEL,
     proxyPort:
       Number.isInteger(config.proxyPort) && (config.proxyPort as number) > 0
         ? (config.proxyPort as number)
@@ -144,3 +159,9 @@ export const updateConfig = async (
     ...patch,
   });
 };
+
+export const getActiveApiKey = (config: NvicodeConfig): string =>
+  config.provider === "openrouter" ? config.openrouterApiKey : config.nvidiaApiKey;
+
+export const getActiveModel = (config: NvicodeConfig): string =>
+  config.provider === "openrouter" ? config.openrouterModel : config.nvidiaModel;

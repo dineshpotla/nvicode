@@ -9,13 +9,16 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  getActiveApiKey,
+  getActiveModel,
   getNvicodePaths,
   loadConfig,
   saveConfig,
+  type ProviderId,
   type NvicodeConfig,
 } from "./config.js";
 import { createProxyServer } from "./proxy.js";
-import { CURATED_MODELS, getRecommendedModels } from "./models.js";
+import { getRecommendedModels } from "./models.js";
 import {
   filterRecordsSince,
   formatDuration,
@@ -32,9 +35,9 @@ const usage = (): void => {
   console.log(`nvicode
 
 Commands:
-  nvicode select model        Select and save a NVIDIA model
-  nvicode models              Show recommended coding models
-  nvicode auth                Save or update NVIDIA API key
+  nvicode select model        Guided provider, key, and model selection
+  nvicode models              Show recommended models for the active provider
+  nvicode auth                Save or update the API key for the active provider
   nvicode config              Show current nvicode config
   nvicode usage               Show token usage and cost comparison
   nvicode activity            Show recent request activity
@@ -61,6 +64,9 @@ const getPathExts = (): string[] => {
 
 const unique = <T>(values: T[]): T[] => [...new Set(values)];
 
+const getProviderLabel = (provider: ProviderId): string =>
+  provider === "openrouter" ? "OpenRouter" : "NVIDIA";
+
 const question = async (prompt: string): Promise<string> => {
   const rl = createInterface({
     input: process.stdin,
@@ -74,30 +80,116 @@ const question = async (prompt: string): Promise<string> => {
   }
 };
 
+const promptProviderSelection = async (
+  initialProvider: ProviderId,
+): Promise<ProviderId> => {
+  console.log("Choose a provider:");
+  console.log("1. NVIDIA");
+  console.log("   Uses the local nvicode proxy and usage dashboard.");
+  console.log("2. OpenRouter");
+  console.log("   Uses Claude Code direct Anthropic-compatible connection.");
+
+  const defaultChoice = initialProvider === "openrouter" ? "2" : "1";
+  const answer = (
+    await question(`Provider selection [${defaultChoice}]: `)
+  ).toLowerCase();
+  const normalized = answer || defaultChoice;
+
+  if (normalized === "1" || normalized === "nvidia") {
+    return "nvidia";
+  }
+  if (
+    normalized === "2" ||
+    normalized === "openrouter" ||
+    normalized === "open-router"
+  ) {
+    return "openrouter";
+  }
+
+  throw new Error("Provider selection is required.");
+};
+
+const promptApiKeyUpdate = async (
+  config: NvicodeConfig,
+  provider: ProviderId,
+): Promise<Pick<NvicodeConfig, "nvidiaApiKey" | "openrouterApiKey">> => {
+  const providerLabel = getProviderLabel(provider);
+  const currentApiKey =
+    provider === "openrouter" ? config.openrouterApiKey : config.nvidiaApiKey;
+
+  if (currentApiKey) {
+    const answer = (
+      await question(
+        `${providerLabel} API key already saved. Update it? [y/N]: `,
+      )
+    ).toLowerCase();
+
+    if (answer !== "y" && answer !== "yes") {
+      return provider === "openrouter"
+        ? { openrouterApiKey: currentApiKey, nvidiaApiKey: config.nvidiaApiKey }
+        : { nvidiaApiKey: currentApiKey, openrouterApiKey: config.openrouterApiKey };
+    }
+
+    const nextKey = await question(
+      `${providerLabel} API key (press Enter or type "skip" to keep current): `,
+    );
+    if (!nextKey || nextKey.toLowerCase() === "skip") {
+      return provider === "openrouter"
+        ? { openrouterApiKey: currentApiKey, nvidiaApiKey: config.nvidiaApiKey }
+        : { nvidiaApiKey: currentApiKey, openrouterApiKey: config.openrouterApiKey };
+    }
+
+    return provider === "openrouter"
+      ? { openrouterApiKey: nextKey, nvidiaApiKey: config.nvidiaApiKey }
+      : { nvidiaApiKey: nextKey, openrouterApiKey: config.openrouterApiKey };
+  }
+
+  const nextKey = await question(
+    `${providerLabel} API key (press Enter or type "skip" to skip): `,
+  );
+  if (!nextKey || nextKey.toLowerCase() === "skip") {
+    return {
+      nvidiaApiKey: config.nvidiaApiKey,
+      openrouterApiKey: config.openrouterApiKey,
+    };
+  }
+
+  return provider === "openrouter"
+    ? { openrouterApiKey: nextKey, nvidiaApiKey: config.nvidiaApiKey }
+    : { nvidiaApiKey: nextKey, openrouterApiKey: config.openrouterApiKey };
+};
+
 const ensureConfigured = async (): Promise<NvicodeConfig> => {
   let config = await loadConfig();
   let changed = false;
+  const providerLabel = getProviderLabel(config.provider);
+  const activeApiKey = getActiveApiKey(config);
+  const activeModel = getActiveModel(config);
 
-  if (!config.apiKey) {
+  if (!activeApiKey) {
     if (!process.stdin.isTTY) {
-      throw new Error("Missing NVIDIA API key. Run `nvicode auth` first.");
+      throw new Error(`Missing ${providerLabel} API key. Run \`nvicode auth\` first.`);
     }
-    const apiKey = await question("NVIDIA API key: ");
+    const apiKey = await question(`${providerLabel} API key: `);
     if (!apiKey) {
-      throw new Error("NVIDIA API key is required.");
+      throw new Error(`${providerLabel} API key is required.`);
     }
     config = {
       ...config,
-      apiKey,
+      ...(config.provider === "openrouter"
+        ? { openrouterApiKey: apiKey }
+        : { nvidiaApiKey: apiKey }),
     };
     changed = true;
   }
 
-  if (!config.model) {
-    const [first] = await getRecommendedModels(config.apiKey);
+  if (!activeModel) {
+    const [first] = await getRecommendedModels(config.provider, getActiveApiKey(config));
     config = {
       ...config,
-      model: first?.id || CURATED_MODELS[0]!.id,
+      ...(config.provider === "openrouter"
+        ? { openrouterModel: first?.id || "anthropic/claude-sonnet-4.6" }
+        : { nvidiaModel: first?.id || "moonshotai/kimi-k2.5" }),
     };
     changed = true;
   }
@@ -111,27 +203,36 @@ const ensureConfigured = async (): Promise<NvicodeConfig> => {
 
 const runAuth = async (): Promise<void> => {
   const config = await loadConfig();
+  const providerLabel = getProviderLabel(config.provider);
+  const currentApiKey = getActiveApiKey(config);
   const apiKey = await question(
-    config.apiKey ? "NVIDIA API key (leave blank to keep current): " : "NVIDIA API key: ",
+    currentApiKey
+      ? `${providerLabel} API key (leave blank to keep current): `
+      : `${providerLabel} API key: `,
   );
 
-  if (!apiKey && config.apiKey) {
-    console.log("Kept existing NVIDIA API key.");
+  if (!apiKey && currentApiKey) {
+    console.log(`Kept existing ${providerLabel} API key.`);
     return;
   }
   if (!apiKey) {
-    throw new Error("NVIDIA API key is required.");
+    throw new Error(`${providerLabel} API key is required.`);
   }
 
   await saveConfig({
     ...config,
-    apiKey,
+    ...(config.provider === "openrouter"
+      ? { openrouterApiKey: apiKey }
+      : { nvidiaApiKey: apiKey }),
   });
-  console.log("Saved NVIDIA API key.");
+  console.log(`Saved ${providerLabel} API key.`);
 };
 
-const printModels = async (apiKey?: string): Promise<void> => {
-  const models = apiKey ? await getRecommendedModels(apiKey) : CURATED_MODELS;
+const printModels = async (
+  provider: ProviderId,
+  apiKey?: string,
+): Promise<void> => {
+  const models = await getRecommendedModels(provider, apiKey || "");
   models.forEach((model, index) => {
     console.log(`${index + 1}. ${model.label}`);
     console.log(`   ${model.id}`);
@@ -140,12 +241,21 @@ const printModels = async (apiKey?: string): Promise<void> => {
 };
 
 const runSelectModel = async (): Promise<void> => {
-  const config = await ensureConfigured();
-  const models = await getRecommendedModels(config.apiKey);
+  const config = await loadConfig();
+  const provider = await promptProviderSelection(config.provider);
+  const providerLabel = getProviderLabel(provider);
+  const keyPatch = await promptApiKeyUpdate(config, provider);
+  const nextConfig = await saveConfig({
+    ...config,
+    ...keyPatch,
+    provider,
+  });
+  const models = await getRecommendedModels(provider, getActiveApiKey(nextConfig));
 
-  console.log("Recommended NVIDIA coding models:");
-  await printModels(config.apiKey);
-  console.log("Type a number from the list or enter a custom model id.");
+  console.log(`Top popular ${providerLabel} models:`);
+  await printModels(provider, getActiveApiKey(nextConfig));
+  console.log("Or paste a full model id.");
+  console.log("Example: qwen/qwen3.6-plus-preview:free");
 
   const answer = await question("Model selection: ");
   const index = Number(answer);
@@ -159,8 +269,10 @@ const runSelectModel = async (): Promise<void> => {
   }
 
   await saveConfig({
-    ...config,
-    model: chosenModel,
+    ...nextConfig,
+    ...(provider === "openrouter"
+      ? { openrouterModel: chosenModel }
+      : { nvidiaModel: chosenModel }),
   });
   console.log(`Saved model: ${chosenModel}`);
 };
@@ -171,11 +283,13 @@ const runConfig = async (): Promise<void> => {
   console.log(`Config file: ${paths.configFile}`);
   console.log(`State dir:   ${paths.stateDir}`);
   console.log(`Usage log:   ${paths.usageLogFile}`);
-  console.log(`Model:       ${config.model}`);
+  console.log(`Provider:    ${getProviderLabel(config.provider)}`);
+  console.log(`Model:       ${getActiveModel(config)}`);
   console.log(`Proxy port:  ${config.proxyPort}`);
   console.log(`Max RPM:     ${config.maxRequestsPerMinute}`);
   console.log(`Thinking:    ${config.thinking ? "on" : "off"}`);
-  console.log(`API key:     ${config.apiKey ? "saved" : "missing"}`);
+  console.log(`NVIDIA key:  ${config.nvidiaApiKey ? "saved" : "missing"}`);
+  console.log(`OpenRouter key: ${config.openrouterApiKey ? "saved" : "missing"}`);
 };
 
 const printUsageBlock = (
@@ -272,6 +386,14 @@ const clearTerminal = (): void => {
 };
 
 const runUsage = async (): Promise<void> => {
+  const config = await loadConfig();
+  if (config.provider === "openrouter") {
+    console.log("OpenRouter uses a direct Claude Code connection.");
+    console.log("Local nvicode usage stats are only available for NVIDIA proxy sessions.");
+    console.log("Use the OpenRouter activity dashboard for OpenRouter usage.");
+    return;
+  }
+
   const interactive = process.stdout.isTTY && process.stdin.isTTY;
   if (!interactive) {
     console.log(await getUsageView());
@@ -300,6 +422,13 @@ const runUsage = async (): Promise<void> => {
 };
 
 const runActivity = async (): Promise<void> => {
+  const config = await loadConfig();
+  if (config.provider === "openrouter") {
+    console.log("OpenRouter uses a direct Claude Code connection.");
+    console.log("Local nvicode activity logs are only available for NVIDIA proxy sessions.");
+    return;
+  }
+
   const records = await readUsageRecords();
   if (records.length === 0) {
     console.log("No activity recorded yet.");
@@ -322,6 +451,13 @@ const runActivity = async (): Promise<void> => {
 };
 
 const runDashboard = async (): Promise<void> => {
+  const config = await loadConfig();
+  if (config.provider === "openrouter") {
+    console.log("OpenRouter uses a direct Claude Code connection.");
+    console.log("Local nvicode dashboards are only available for NVIDIA proxy sessions.");
+    return;
+  }
+
   const records = await readUsageRecords();
   if (records.length === 0) {
     console.log("No usage recorded yet.");
@@ -516,21 +652,44 @@ const spawnClaudeProcess = (
 
 const runLaunchClaude = async (args: string[]): Promise<void> => {
   const config = await ensureConfigured();
-  await ensureProxyRunning(config);
   const claudeBinary = await resolveClaudeBinary();
+  const activeModel = getActiveModel(config);
+  const activeApiKey = getActiveApiKey(config);
 
-  const child = spawnClaudeProcess(claudeBinary, args, {
-    ...process.env,
-    ANTHROPIC_BASE_URL: `http://127.0.0.1:${config.proxyPort}`,
-    ANTHROPIC_AUTH_TOKEN: config.proxyToken,
-    ANTHROPIC_API_KEY: "",
-    ANTHROPIC_MODEL: config.model,
-    CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
-    ANTHROPIC_CUSTOM_MODEL_OPTION: config.model,
-    ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "nvicode custom model",
-    ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION:
-      "Claude Code via local NVIDIA gateway",
-  });
+  const env =
+    config.provider === "openrouter"
+      ? {
+          ...process.env,
+          ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+          ANTHROPIC_AUTH_TOKEN: activeApiKey,
+          ANTHROPIC_API_KEY: "",
+          ANTHROPIC_MODEL: activeModel,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: activeModel,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: activeModel,
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: activeModel,
+          CLAUDE_CODE_SUBAGENT_MODEL: activeModel,
+          CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+        }
+      : (() => {
+          return {
+            ...process.env,
+            ANTHROPIC_BASE_URL: `http://127.0.0.1:${config.proxyPort}`,
+            ANTHROPIC_AUTH_TOKEN: config.proxyToken,
+            ANTHROPIC_API_KEY: "",
+            ANTHROPIC_MODEL: activeModel,
+            CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+            ANTHROPIC_CUSTOM_MODEL_OPTION: activeModel,
+            ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "nvicode custom model",
+            ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION:
+              "Claude Code via local NVIDIA gateway",
+          };
+        })();
+
+  if (config.provider === "nvidia") {
+    await ensureProxyRunning(config);
+  }
+
+  const child = spawnClaudeProcess(claudeBinary, args, env);
 
   await new Promise<void>((resolve, reject) => {
     child.on("exit", (code, signal) => {
@@ -547,6 +706,9 @@ const runLaunchClaude = async (args: string[]): Promise<void> => {
 
 const runServe = async (): Promise<void> => {
   const config = await ensureConfigured();
+  if (config.provider !== "nvidia") {
+    throw new Error("`nvicode serve` is only available for the NVIDIA provider.");
+  }
   const server = createProxyServer(config);
 
   await new Promise<void>((resolve, reject) => {
@@ -555,7 +717,7 @@ const runServe = async (): Promise<void> => {
   });
 
   console.error(
-    `nvicode proxy listening on http://127.0.0.1:${config.proxyPort} using ${config.model}`,
+    `nvicode proxy listening on http://127.0.0.1:${config.proxyPort} using ${config.nvidiaModel}`,
   );
 
   const shutdown = (): void => {
@@ -582,7 +744,7 @@ const main = async (): Promise<void> => {
 
   if (command === "models") {
     const config = await loadConfig();
-    await printModels(config.apiKey || undefined);
+    await printModels(config.provider, getActiveApiKey(config) || undefined);
     return;
   }
 

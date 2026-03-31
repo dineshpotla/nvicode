@@ -601,7 +601,7 @@ const resolveTargetModel = (
 ): string =>
   payload.model && payload.model.includes("/") && !payload.model.startsWith("claude-")
     ? payload.model
-    : config.model;
+    : config.nvidiaModel;
 
 const callNvidia = async (
   config: NvicodeConfig,
@@ -651,7 +651,7 @@ const callNvidia = async (
       const response = await fetch(NVIDIA_URL, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${config.apiKey}`,
+          Authorization: `Bearer ${config.nvidiaApiKey}`,
           Accept: "application/json",
           "Content-Type": "application/json",
         },
@@ -698,7 +698,7 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
       if (url.pathname === "/health") {
         sendJson(response, 200, {
           ok: true,
-          model: config.model,
+          model: config.nvidiaModel,
           port: config.proxyPort,
           thinking: config.thinking,
           maxRequestsPerMinute: config.maxRequestsPerMinute,

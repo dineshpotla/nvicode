@@ -1,7 +1,7 @@
 {
   "name": "nvicode",
-  "version": "0.1.5",
-  "description": "Run Claude Code through NVIDIA-hosted models using a local Anthropic-compatible gateway.",
+  "version": "0.1.6",
+  "description": "Run Claude Code through NVIDIA-hosted models or OpenRouter using a simple CLI wrapper.",
   "author": "Dinesh Potla",
   "keywords": [
     "claude-code",

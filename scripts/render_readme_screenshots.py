@@ -127,49 +127,46 @@ def render_terminal_card(
 def main() -> None:
     render_terminal_card(
         title="nvicode auth",
-        subtitle="Actual first-run prompt and save confirmation",
+        subtitle="Provider-aware key save flow",
         filename="auth.png",
         body=(
             "$ nvicode auth\n"
-            "NVIDIA API key: nvapi-example-readme-key\n"
-            "Saved NVIDIA API key."
+            "OpenRouter API key: sk-or-example-readme-key\n"
+            "Saved OpenRouter API key."
         ),
     )
 
     render_terminal_card(
         title="nvicode select model",
-        subtitle="Actual interactive model picker output",
+        subtitle="Guided provider, key, and model setup",
         filename="select-model.png",
         body=(
             "$ nvicode select model\n"
-            "Recommended NVIDIA coding models:\n"
-            "1. Kimi K2.5\n"
-            "   moonshotai/kimi-k2.5\n"
-            "   Strong coding and agentic workflow model.\n"
-            "2. Qwen3 Coder 480B\n"
-            "   qwen/qwen3-coder-480b-a35b-instruct\n"
-            "   Large coding-focused Qwen model.\n"
-            "3. GLM5\n"
-            "   z-ai/glm5\n"
-            "   General purpose reasoning model with code capability.\n"
-            "4. DeepSeek V3.2\n"
-            "   deepseek-ai/deepseek-v3.2\n"
-            "   General coding and reasoning model.\n"
-            "5. Codestral 22B\n"
-            "   mistralai/codestral-22b-instruct-v0.1\n"
-            "   Compact coding-specialized model.\n"
-            "6. Qwen2.5 Coder 32B\n"
-            "   qwen/qwen2.5-coder-32b-instruct\n"
-            "   Smaller coding-focused Qwen model.\n"
-            "Type a number from the list or enter a custom model id.\n"
-            "Model selection: 1\n"
-            "Saved model: moonshotai/kimi-k2.5"
+            "Choose a provider:\n"
+            "1. NVIDIA\n"
+            "2. OpenRouter\n"
+            "Provider selection [2]: 2\n"
+            "OpenRouter API key already saved. Update it? [y/N]: n\n"
+            "Top popular OpenRouter models:\n"
+            "1. Qwen 3.6 Plus Preview (Free)\n"
+            "   qwen/qwen3.6-plus-preview:free\n"
+            "   Free OpenRouter Qwen preview model.\n"
+            "2. Claude Sonnet 4.6\n"
+            "   anthropic/claude-sonnet-4.6\n"
+            "   Recommended OpenRouter model for Claude Code compatibility.\n"
+            "3. Claude Opus 4.6\n"
+            "   anthropic/claude-opus-4.6\n"
+            "   Higher-end Anthropic model through OpenRouter.\n"
+            "Or paste a full model id.\n"
+            "Example: qwen/qwen3.6-plus-preview:free\n"
+            "Model selection: qwen/qwen3.6-plus-preview:free\n"
+            "Saved model: qwen/qwen3.6-plus-preview:free"
         ),
     )
 
     render_terminal_card(
         title="nvicode launch claude",
-        subtitle="Actual Claude Code status after launching through nvicode",
+        subtitle="Claude Code launched through OpenRouter via nvicode",
         filename="launch.png",
         body=(
             "$ nvicode launch claude\n"
@@ -183,9 +180,9 @@ def main() -> None:
             "Session ID: 2c9d288b-98b0-4fde-ba25-533bfd06f53e\n"
             "cwd: ~/project\n"
             "Auth token: ANTHROPIC_AUTH_TOKEN\n"
-            "Anthropic base URL: http://127.0.0.1:8788\n"
+            "Anthropic base URL: https://openrouter.ai/api\n"
             "\n"
-            "Model: moonshotai/kimi-k2.5\n"
+            "Model: qwen/qwen3.6-plus-preview:free\n"
             "Setting sources: User settings"
         ),
     )

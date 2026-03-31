@@ -1,10 +1,12 @@
+import type { ProviderId } from "./config.js";
+
 export interface ModelOption {
   id: string;
   label: string;
   description: string;
 }
 
-export const CURATED_MODELS: ModelOption[] = [
+export const NVIDIA_CURATED_MODELS: ModelOption[] = [
   {
     id: "moonshotai/kimi-k2.5",
     label: "Kimi K2.5",
@@ -34,6 +36,29 @@ export const CURATED_MODELS: ModelOption[] = [
     id: "qwen/qwen2.5-coder-32b-instruct",
     label: "Qwen2.5 Coder 32B",
     description: "Smaller coding-focused Qwen model.",
+  },
+];
+
+export const OPENROUTER_CURATED_MODELS: ModelOption[] = [
+  {
+    id: "qwen/qwen3.6-plus-preview:free",
+    label: "Qwen 3.6 Plus Preview (Free)",
+    description: "Free OpenRouter Qwen preview model.",
+  },
+  {
+    id: "anthropic/claude-sonnet-4.6",
+    label: "Claude Sonnet 4.6",
+    description: "Recommended OpenRouter model for Claude Code compatibility.",
+  },
+  {
+    id: "anthropic/claude-opus-4.6",
+    label: "Claude Opus 4.6",
+    description: "Higher-end Anthropic model through OpenRouter.",
+  },
+  {
+    id: "anthropic/claude-haiku-4.5",
+    label: "Claude Haiku 4.5",
+    description: "Faster lower-cost Anthropic model through OpenRouter.",
   },
 ];
 
@@ -68,13 +93,18 @@ export const fetchAvailableModelIds = async (
 };
 
 export const getRecommendedModels = async (
+  provider: ProviderId,
   apiKey: string,
 ): Promise<ModelOption[]> => {
+  if (provider === "openrouter") {
+    return OPENROUTER_CURATED_MODELS;
+  }
+
   try {
     const available = await fetchAvailableModelIds(apiKey);
-    const curated = CURATED_MODELS.filter((model) => available.has(model.id));
-    return curated.length > 0 ? curated : CURATED_MODELS;
+    const curated = NVIDIA_CURATED_MODELS.filter((model) => available.has(model.id));
+    return curated.length > 0 ? curated : NVIDIA_CURATED_MODELS;
   } catch {
-    return CURATED_MODELS;
+    return NVIDIA_CURATED_MODELS;
   }
 };

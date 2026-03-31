@@ -1,6 +1,6 @@
 # Navicode - one click Nvidia NIM to Claude code connection
 
-Run Claude Code through NVIDIA-hosted models using a local Anthropic-compatible gateway.
+Run Claude Code through NVIDIA-hosted models or OpenRouter using a simple CLI wrapper.
 Use top open-source model APIs on NVIDIA Build for free, with `nvicode` paced to `40 RPM` by default.
 
 Supported environments:
@@ -17,21 +17,16 @@ Install the published package:
 npm install -g nvicode
 ```
 
-Save your NVIDIA API key:
+Set up provider, key, and model:
 
-Get a free key from [NVIDIA Build API Keys](https://build.nvidia.com/settings/api-keys).
-
-```sh
-nvicode auth
-```
-
-Choose a model:
+- NVIDIA: get a free key from [NVIDIA Build API Keys](https://build.nvidia.com/settings/api-keys)
+- OpenRouter: use your OpenRouter API key
 
 ```sh
 nvicode select model
 ```
 
-Launch Claude Code through NVIDIA:
+Launch Claude Code through your selected provider:
 
 ```sh
 nvicode launch claude
@@ -47,7 +42,7 @@ nvicode launch claude
 
 ![nvicode select model](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/select-model.png)
 
-### Launch Claude Code through NVIDIA
+### Launch Claude Code through your selected provider
 
 ![nvicode launch claude](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/launch.png)
 
@@ -65,13 +60,18 @@ nvicode auth
 nvicode launch claude -p "Reply with exactly OK"
 ```
 
-The launcher starts a local proxy on `127.0.0.1:8788`, points Claude Code at it with `ANTHROPIC_BASE_URL`, and forwards requests to NVIDIA `chat/completions`.
+Provider behavior:
+- NVIDIA: starts a local proxy on `127.0.0.1:8788`, points Claude Code at it with `ANTHROPIC_BASE_URL`, and forwards requests to NVIDIA `chat/completions`.
+- OpenRouter: points Claude Code directly at `https://openrouter.ai/api` using OpenRouter credentials and Anthropic-compatible model ids.
+
 In an interactive terminal, `nvicode usage` refreshes live every 2 seconds. When piped or redirected, it prints a single snapshot.
 
-If no NVIDIA API key is saved yet, `nvicode` prompts for one on first use.
+`nvicode select model` now asks for provider, optional API key update, and model choice in one guided flow.
+If no API key is saved for the active provider yet, `nvicode` prompts for one on first use.
 By default, the proxy paces upstream NVIDIA requests at `40 RPM`. Override that with `NVICODE_MAX_RPM` if your account has a different limit.
 The usage dashboard compares your local NVIDIA run cost against Claude Opus 4.6 at `$5 / MTok input` and `$25 / MTok output`, based on Anthropic pricing as of `2026-03-30`.
 If your NVIDIA endpoint is not free, override local cost estimates with `NVICODE_INPUT_USD_PER_MTOK` and `NVICODE_OUTPUT_USD_PER_MTOK`.
+Local `usage`, `activity`, and `dashboard` commands are available for NVIDIA proxy sessions. OpenRouter sessions use OpenRouter's direct connection path instead.
 
 ## Requirements
 
@@ -94,4 +94,4 @@ npm link
 - `thinking` is disabled by default because some NVIDIA reasoning models can consume the entire output budget and return no visible answer to Claude Code.
 - The proxy supports basic text, tool calls, tool results, and token count estimation.
 - The proxy includes upstream request pacing and retries on NVIDIA `429` responses.
-- Claude Code remains the frontend; the selected NVIDIA model becomes the backend.
+- Claude Code remains the frontend; the selected provider/model becomes the backend.
