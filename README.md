@@ -1,4 +1,4 @@
-# Navicode - one click Nvidia NIM to Claude code connection
+# Navi Code - introducing one click Nvidia/OpenRouter to Claude Code
 
 Run Claude Code through NVIDIA-hosted models or OpenRouter using a simple CLI wrapper.
 Use top open-source model APIs on NVIDIA Build for free, with `nvicode` paced to `40 RPM` by default.

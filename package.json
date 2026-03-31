@@ -1,7 +1,7 @@
 {
   "name": "nvicode",
   "version": "0.1.6",
-  "description": "Run Claude Code through NVIDIA-hosted models or OpenRouter using a simple CLI wrapper.",
+  "description": "Introducing one click Nvidia/OpenRouter to Claude Code.",
   "author": "Dinesh Potla",
   "keywords": [
     "claude-code",
