@@ -1,6 +1,7 @@
 # Navicode - one click Nvidia NIM to Claude code connection
 
 Run Claude Code through NVIDIA-hosted models using a local Anthropic-compatible gateway.
+Use top open-source model APIs on NVIDIA Build for free, with `nvicode` paced to `40 RPM` by default.
 
 Supported environments:
 - macOS
