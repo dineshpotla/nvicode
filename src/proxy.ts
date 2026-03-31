@@ -528,6 +528,73 @@ const estimateTokens = (payload: unknown): number => {
   return Math.max(1, Math.ceil(raw.length / 4));
 };
 
+const getCurrentTurnMessages = (
+  messages: AnthropicMessage[] | undefined,
+): AnthropicMessage[] => {
+  const entries = messages ?? [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index]?.role === "assistant") {
+      return entries.slice(index + 1);
+    }
+  }
+  return entries;
+};
+
+const extractPromptInput = (
+  messages: AnthropicMessage[],
+): Array<string | OpenAIImagePart> => {
+  const parts: Array<string | OpenAIImagePart> = [];
+
+  for (const message of messages) {
+    if (message.role !== "user") {
+      continue;
+    }
+
+    if (typeof message.content === "string") {
+      if (message.content.trim().length > 0) {
+        parts.push(message.content);
+      }
+      continue;
+    }
+
+    for (const block of message.content) {
+      if (block.type === "text" && block.text.trim().length > 0) {
+        parts.push(block.text);
+        continue;
+      }
+
+      if (block.type === "image" && block.source?.data) {
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${block.source.media_type || "application/octet-stream"};base64,${block.source.data}`,
+          },
+        });
+      }
+    }
+  }
+
+  return parts;
+};
+
+const estimateTurnInputTokens = (
+  payload: AnthropicMessagesRequest,
+): number => {
+  const currentTurnMessages = getCurrentTurnMessages(payload.messages);
+  const promptInput = extractPromptInput(currentTurnMessages);
+  if (promptInput.length === 0) {
+    return 0;
+  }
+
+  return estimateTokens({
+    prompt: promptInput,
+  });
+};
+
+const estimateTurnOutputTokens = (
+  content: AnthropicContentBlock[],
+): number => estimateTokens(content);
+
 const resolveTargetModel = (
   config: NvicodeConfig,
   payload: AnthropicMessagesRequest,
@@ -672,6 +739,7 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
           messages: payload.messages ?? [],
           tools: payload.tools ?? [],
         });
+        const estimatedTurnInputTokens = estimateTurnInputTokens(payload);
         const startedAt = Date.now();
         const pricing = getPricingSnapshot();
 
@@ -683,6 +751,9 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
           );
           const choice = upstream.choices?.[0];
           const mappedContent = mapResponseContent(choice);
+          const estimatedTurnOutputTokens = estimateTurnOutputTokens(
+            mappedContent,
+          );
 
           const anthropicResponse = {
             id: upstream.id || `msg_${randomUUID()}`,
@@ -705,6 +776,8 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
               model: targetModel,
               inputTokens: anthropicResponse.usage.input_tokens,
               outputTokens: anthropicResponse.usage.output_tokens,
+              turnInputTokens: estimatedTurnInputTokens,
+              turnOutputTokens: estimatedTurnOutputTokens,
               latencyMs: Date.now() - startedAt,
               stopReason: anthropicResponse.stop_reason,
               pricing,
@@ -816,6 +889,8 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
               model: targetModel,
               inputTokens: estimatedInputTokens,
               outputTokens: 0,
+              turnInputTokens: estimatedTurnInputTokens,
+              turnOutputTokens: 0,
               latencyMs: Date.now() - startedAt,
               error: message,
               pricing,

@@ -1,4 +1,4 @@
-# nvicode
+# Navicode - one click Nvidia NIM to Claude code connection
 
 Run Claude Code through NVIDIA-hosted models using a local Anthropic-compatible gateway.
 
@@ -65,6 +65,7 @@ nvicode launch claude -p "Reply with exactly OK"
 ```
 
 The launcher starts a local proxy on `127.0.0.1:8788`, points Claude Code at it with `ANTHROPIC_BASE_URL`, and forwards requests to NVIDIA `chat/completions`.
+In an interactive terminal, `nvicode usage` refreshes live every 2 seconds. When piped or redirected, it prints a single snapshot.
 
 If no NVIDIA API key is saved yet, `nvicode` prompts for one on first use.
 By default, the proxy paces upstream NVIDIA requests at `40 RPM`. Override that with `NVICODE_MAX_RPM` if your account has a different limit.

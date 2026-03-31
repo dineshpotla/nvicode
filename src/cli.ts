@@ -187,34 +187,42 @@ const printUsageBlock = (
   console.log(
     `Requests: ${formatInteger(summary.requests)} (${formatInteger(summary.successes)} ok, ${formatInteger(summary.errors)} error)`,
   );
-  console.log(`Input tokens: ${formatInteger(summary.inputTokens)}`);
-  console.log(`Output tokens: ${formatInteger(summary.outputTokens)}`);
+  console.log(`Turn input tokens: ${formatInteger(summary.turnInputTokens)}`);
+  console.log(`Billed input tokens: ${formatInteger(summary.inputTokens)}`);
+  console.log(`Turn output tokens: ${formatInteger(summary.turnOutputTokens)}`);
+  console.log(`Billed output tokens: ${formatInteger(summary.outputTokens)}`);
   console.log(`NVIDIA cost: ${formatUsd(summary.providerCostUsd)}`);
-  console.log(`Opus 4.6 equivalent: ${formatUsd(summary.compareCostUsd)}`);
   console.log(`Estimated savings: ${formatUsd(summary.savingsUsd)}`);
 };
 
-const runUsage = async (): Promise<void> => {
+const getUsageView = async (): Promise<string> => {
   const records = await readUsageRecords();
   if (records.length === 0) {
-    console.log("No usage recorded yet.");
-    return;
+    return [
+      "nvicode usage",
+      "",
+      "No usage recorded yet.",
+      "Keep this open and new activity will appear automatically.",
+    ].join("\n");
   }
 
   const now = Date.now();
   const latestPricing = records[0]?.pricing;
+  const lines: string[] = ["nvicode usage", ""];
   if (latestPricing) {
-    console.log("Pricing basis:");
-    console.log(
+    lines.push("Pricing basis:");
+    lines.push(
       `- NVIDIA configured cost: ${formatUsd(latestPricing.providerInputUsdPerMTok)} / MTok input, ${formatUsd(latestPricing.providerOutputUsdPerMTok)} / MTok output`,
     );
-    console.log(
+    lines.push(
       `- ${latestPricing.compareModel}: ${formatUsd(latestPricing.compareInputUsdPerMTok)} / MTok input, ${formatUsd(latestPricing.compareOutputUsdPerMTok)} / MTok output`,
     );
-    console.log(
+    lines.push(
       `- Comparison source: ${latestPricing.comparePricingSource} (${latestPricing.comparePricingUpdatedAt})`,
     );
-    console.log("");
+    lines.push("- In/Out columns show current-turn tokens.");
+    lines.push("- Billed In/Billed Out include the full Claude Code request context.");
+    lines.push("");
   }
 
   const windows = [
@@ -231,21 +239,64 @@ const runUsage = async (): Promise<void> => {
     return {
       window: window.label,
       requests: `${formatInteger(summary.requests)} (${formatInteger(summary.successes)} ok/${formatInteger(summary.errors)} err)`,
-      inputTokens: formatInteger(summary.inputTokens),
-      outputTokens: formatInteger(summary.outputTokens),
+      inputTokens: formatInteger(summary.turnInputTokens),
+      billedInputTokens: formatInteger(summary.inputTokens),
+      outputTokens: formatInteger(summary.turnOutputTokens),
+      billedOutputTokens: formatInteger(summary.outputTokens),
       nvidiaCost: formatUsd(summary.providerCostUsd),
       savings: formatUsd(summary.savingsUsd),
     };
   });
 
-  console.log(
-    "Window        Requests         Input Tok  Output Tok  NVIDIA      Saved",
+  lines.push(
+    `Snapshot: ${formatTimestamp(new Date(now).toISOString())}`,
+  );
+  lines.push("");
+  lines.push(
+    "Window        Requests         In Tok   Billed In  Out Tok  Billed Out  NVIDIA      Saved",
   );
   rows.forEach((row) => {
-    console.log(
-      `${row.window.padEnd(13)} ${row.requests.padEnd(16)} ${row.inputTokens.padStart(10)} ${row.outputTokens.padStart(11)} ${row.nvidiaCost.padStart(10)} ${row.savings.padStart(10)}`,
+    lines.push(
+      `${row.window.padEnd(13)} ${row.requests.padEnd(16)} ${row.inputTokens.padStart(8)} ${row.billedInputTokens.padStart(11)} ${row.outputTokens.padStart(8)} ${row.billedOutputTokens.padStart(11)} ${row.nvidiaCost.padStart(10)} ${row.savings.padStart(10)}`,
     );
   });
+
+  return lines.join("\n");
+};
+
+const sleep = async (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+const clearTerminal = (): void => {
+  process.stdout.write("\x1b[2J\x1b[H");
+};
+
+const runUsage = async (): Promise<void> => {
+  const interactive = process.stdout.isTTY && process.stdin.isTTY;
+  if (!interactive) {
+    console.log(await getUsageView());
+    return;
+  }
+
+  let stopped = false;
+  const stop = (): void => {
+    stopped = true;
+  };
+
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  try {
+    while (!stopped) {
+      clearTerminal();
+      process.stdout.write(await getUsageView());
+      process.stdout.write("\n\nRefreshing every 2s. Press Ctrl+C to exit.\n");
+      await sleep(2_000);
+    }
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
 };
 
 const runActivity = async (): Promise<void> => {
@@ -256,13 +307,13 @@ const runActivity = async (): Promise<void> => {
   }
 
   console.log(
-    "Timestamp             Status  Model                           In Tok  Out Tok  Latency  NVIDIA     Saved",
+    "Timestamp             Status  Model                         In Tok  Bill In  Out Tok Bill Out  Latency  NVIDIA     Saved",
   );
   for (const record of records.slice(0, 15)) {
-    const model = record.model.length > 30 ? `${record.model.slice(0, 27)}...` : record.model;
+    const model = record.model.length > 28 ? `${record.model.slice(0, 25)}...` : record.model;
     const status = record.status === "success" ? "ok" : "error";
     console.log(
-      `${formatTimestamp(record.timestamp).padEnd(21)} ${status.padEnd(6)} ${model.padEnd(31)} ${formatInteger(record.inputTokens).padStart(7)} ${formatInteger(record.outputTokens).padStart(8)} ${formatDuration(record.latencyMs).padStart(8)} ${formatUsd(record.providerCostUsd).padStart(10)} ${formatUsd(record.savingsUsd).padStart(10)}`,
+      `${formatTimestamp(record.timestamp).padEnd(21)} ${status.padEnd(6)} ${model.padEnd(29)} ${formatInteger(record.turnInputTokens ?? record.visibleInputTokens ?? record.inputTokens).padStart(7)} ${formatInteger(record.inputTokens).padStart(8)} ${formatInteger(record.turnOutputTokens ?? record.visibleOutputTokens ?? record.outputTokens).padStart(8)} ${formatInteger(record.outputTokens).padStart(8)} ${formatDuration(record.latencyMs).padStart(8)} ${formatUsd(record.providerCostUsd).padStart(10)} ${formatUsd(record.savingsUsd).padStart(10)}`,
     );
     if (record.error) {
       console.log(`  error: ${record.error}`);

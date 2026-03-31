@@ -18,6 +18,10 @@ export interface UsageRecord {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  turnInputTokens?: number;
+  turnOutputTokens?: number;
+  visibleInputTokens?: number;
+  visibleOutputTokens?: number;
   latencyMs: number;
   providerCostUsd: number;
   compareCostUsd: number;
@@ -33,6 +37,10 @@ export interface UsageSummary {
   errors: number;
   inputTokens: number;
   outputTokens: number;
+  turnInputTokens: number;
+  turnOutputTokens: number;
+  visibleInputTokens: number;
+  visibleOutputTokens: number;
   providerCostUsd: number;
   compareCostUsd: number;
   savingsUsd: number;
@@ -83,6 +91,10 @@ export const buildUsageRecord = ({
   model,
   inputTokens,
   outputTokens,
+  turnInputTokens,
+  turnOutputTokens,
+  visibleInputTokens,
+  visibleOutputTokens,
   latencyMs,
   stopReason,
   error,
@@ -94,6 +106,10 @@ export const buildUsageRecord = ({
   model: string;
   inputTokens: number;
   outputTokens: number;
+  turnInputTokens?: number;
+  turnOutputTokens?: number;
+  visibleInputTokens?: number;
+  visibleOutputTokens?: number;
   latencyMs: number;
   stopReason?: string | null;
   error?: string;
@@ -119,6 +135,18 @@ export const buildUsageRecord = ({
     model,
     inputTokens,
     outputTokens,
+    ...(turnInputTokens !== undefined
+      ? { turnInputTokens }
+      : {}),
+    ...(turnOutputTokens !== undefined
+      ? { turnOutputTokens }
+      : {}),
+    ...(visibleInputTokens !== undefined
+      ? { visibleInputTokens }
+      : {}),
+    ...(visibleOutputTokens !== undefined
+      ? { visibleOutputTokens }
+      : {}),
     latencyMs,
     providerCostUsd,
     compareCostUsd,
@@ -163,6 +191,16 @@ export const summarizeUsage = (records: UsageRecord[]): UsageSummary =>
       summary.errors += record.status === "error" ? 1 : 0;
       summary.inputTokens += record.inputTokens;
       summary.outputTokens += record.outputTokens;
+      summary.turnInputTokens +=
+        record.turnInputTokens ??
+        record.visibleInputTokens ??
+        record.inputTokens;
+      summary.turnOutputTokens +=
+        record.turnOutputTokens ??
+        record.visibleOutputTokens ??
+        record.outputTokens;
+      summary.visibleInputTokens += record.visibleInputTokens ?? record.inputTokens;
+      summary.visibleOutputTokens += record.visibleOutputTokens ?? record.outputTokens;
       summary.providerCostUsd += record.providerCostUsd;
       summary.compareCostUsd += record.compareCostUsd;
       summary.savingsUsd += record.savingsUsd;
@@ -174,6 +212,10 @@ export const summarizeUsage = (records: UsageRecord[]): UsageSummary =>
       errors: 0,
       inputTokens: 0,
       outputTokens: 0,
+      turnInputTokens: 0,
+      turnOutputTokens: 0,
+      visibleInputTokens: 0,
+      visibleOutputTokens: 0,
       providerCostUsd: 0,
       compareCostUsd: 0,
       savingsUsd: 0,
