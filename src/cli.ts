@@ -30,6 +30,7 @@ import {
 } from "./usage.js";
 
 const __filename = fileURLToPath(import.meta.url);
+const NVICODE_WRAPPER_MARKER = "managed by nvicode";
 
 const usage = (): void => {
   console.log(`nvicode
@@ -66,6 +67,54 @@ const unique = <T>(values: T[]): T[] => [...new Set(values)];
 
 const getProviderLabel = (provider: ProviderId): string =>
   provider === "openrouter" ? "OpenRouter" : "NVIDIA";
+
+const getClaudeCommandNames = (): string[] =>
+  isWindows ? ["claude.exe", "claude.cmd", "claude.bat", "claude"] : ["claude"];
+
+const getClaudeNativeNames = (): string[] =>
+  isWindows
+    ? ["claude-native.exe", "claude-native.cmd", "claude-native.bat", "claude-native"]
+    : ["claude-native"];
+
+const pathExists = async (targetPath: string): Promise<boolean> => {
+  try {
+    await fs.access(targetPath, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readIfExists = async (targetPath: string): Promise<string | null> => {
+  try {
+    return await fs.readFile(targetPath, "utf8");
+  } catch {
+    return null;
+  }
+};
+
+const isManagedClaudeWrapper = async (targetPath: string): Promise<boolean> => {
+  const contents = await readIfExists(targetPath);
+  return contents?.includes(NVICODE_WRAPPER_MARKER) ?? false;
+};
+
+const renderClaudeWrapper = (): string => {
+  if (isWindows) {
+    return [
+      "@echo off",
+      `REM ${NVICODE_WRAPPER_MARKER}`,
+      `"${process.execPath}" "${__filename}" launch claude %*`,
+      "",
+    ].join("\r\n");
+  }
+
+  return [
+    "#!/bin/sh",
+    `# ${NVICODE_WRAPPER_MARKER}`,
+    `exec "${process.execPath}" "${__filename}" launch claude "$@"`,
+    "",
+  ].join("\n");
+};
 
 const question = async (prompt: string): Promise<string> => {
   const rl = createInterface({
@@ -554,11 +603,100 @@ const resolveClaudeVersionEntry = async (entryPath: string): Promise<string | nu
   return null;
 };
 
+const findExistingClaudeNativeInDirectory = async (
+  directory: string,
+): Promise<string | null> => {
+  for (const name of getClaudeNativeNames()) {
+    const candidate = path.join(directory, name);
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
+const resolvePersistentClaudeCommand = async (): Promise<string | null> => {
+  for (const name of getClaudeCommandNames()) {
+    const found = await findExecutableInPath(name);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+};
+
+const getWrapperInstallPaths = async (
+  claudeCommandPath: string,
+): Promise<{ wrapperPath: string; nativePath: string }> => {
+  const directory = path.dirname(claudeCommandPath);
+  const existingNative = await findExistingClaudeNativeInDirectory(directory);
+  if (existingNative) {
+    return {
+      wrapperPath: claudeCommandPath,
+      nativePath: existingNative,
+    };
+  }
+
+  if (isWindows && path.extname(claudeCommandPath).toLowerCase() === ".exe") {
+    return {
+      wrapperPath: path.join(directory, "claude.cmd"),
+      nativePath: path.join(directory, "claude-native.exe"),
+    };
+  }
+
+  const extension = path.extname(claudeCommandPath);
+  return {
+    wrapperPath: claudeCommandPath,
+    nativePath: path.join(directory, `claude-native${extension}`),
+  };
+};
+
+const writeExecutableTextFile = async (
+  targetPath: string,
+  contents: string,
+): Promise<void> => {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, contents, "utf8");
+  if (!isWindows) {
+    await fs.chmod(targetPath, 0o755);
+  }
+};
+
+const ensurePersistentClaudeRouting = async (): Promise<"installed" | "updated" | "already" | "skipped"> => {
+  const claudeCommandPath = await resolvePersistentClaudeCommand();
+  if (!claudeCommandPath) {
+    return "skipped";
+  }
+
+  const wrapperContents = renderClaudeWrapper();
+  const { wrapperPath, nativePath } = await getWrapperInstallPaths(claudeCommandPath);
+
+  if (await isManagedClaudeWrapper(wrapperPath)) {
+    const currentWrapper = await readIfExists(wrapperPath);
+    if (currentWrapper === wrapperContents) {
+      return "already";
+    }
+
+    await writeExecutableTextFile(wrapperPath, wrapperContents);
+    return "updated";
+  }
+
+  if (!(await pathExists(nativePath))) {
+    await fs.rename(claudeCommandPath, nativePath);
+  } else if (claudeCommandPath !== wrapperPath && await pathExists(wrapperPath)) {
+    await fs.rm(wrapperPath, { force: true });
+  } else if (claudeCommandPath === wrapperPath) {
+    await fs.rm(wrapperPath, { force: true });
+  }
+
+  await writeExecutableTextFile(wrapperPath, wrapperContents);
+  return "installed";
+};
+
 const resolveClaudeBinary = async (): Promise<string> => {
-  const nativeNames = isWindows
-    ? ["claude-native.exe", "claude-native.cmd", "claude-native.bat", "claude-native"]
-    : ["claude-native"];
-  for (const name of nativeNames) {
+  for (const name of getClaudeNativeNames()) {
     const nativeInPath = await findExecutableInPath(name);
     if (nativeInPath) {
       return nativeInPath;
@@ -601,12 +739,9 @@ const resolveClaudeBinary = async (): Promise<string> => {
     // continue
   }
 
-  const cliNames = isWindows
-    ? ["claude.exe", "claude.cmd", "claude.bat", "claude"]
-    : ["claude"];
-  for (const name of cliNames) {
+  for (const name of getClaudeCommandNames()) {
     const claudeInPath = await findExecutableInPath(name);
-    if (claudeInPath) {
+    if (claudeInPath && !(await isManagedClaudeWrapper(claudeInPath))) {
       return claudeInPath;
     }
   }
@@ -652,6 +787,7 @@ const spawnClaudeProcess = (
 
 const runLaunchClaude = async (args: string[]): Promise<void> => {
   const config = await ensureConfigured();
+  const routingStatus = await ensurePersistentClaudeRouting().catch(() => "skipped" as const);
   const claudeBinary = await resolveClaudeBinary();
   const activeModel = getActiveModel(config);
   const activeApiKey = getActiveApiKey(config);
@@ -687,6 +823,15 @@ const runLaunchClaude = async (args: string[]): Promise<void> => {
 
   if (config.provider === "nvidia") {
     await ensureProxyRunning(config);
+  }
+
+  if (
+    process.stdout.isTTY &&
+    (routingStatus === "installed" || routingStatus === "updated")
+  ) {
+    console.error(
+      "nvicode installed persistent `claude` routing. Future plain `claude` launches will use the selected nvicode provider and model.",
+    );
   }
 
   const child = spawnClaudeProcess(claudeBinary, args, env);

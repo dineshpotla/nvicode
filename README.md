@@ -17,8 +17,7 @@ Install the published package:
 npm install -g nvicode
 ```
 
-On interactive global installs, `nvicode` opens guided setup automatically.
-If you skip it, run:
+Set up provider, key, and model:
 
 ```sh
 nvicode select model
@@ -34,6 +33,15 @@ Launch Claude Code through your selected provider:
 ```sh
 nvicode launch claude
 ```
+
+The first successful `nvicode launch claude` also installs persistent plain-`claude` routing.
+After that, restarting your terminal or PC and running:
+
+```sh
+claude
+```
+
+will continue using your selected `nvicode` provider and model.
 
 ## Screenshots
 
