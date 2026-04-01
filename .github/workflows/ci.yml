@@ -30,3 +30,41 @@ jobs:
 
       - name: Pack dry run
         run: npm pack --dry-run
+
+  install-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - 20
+          - 22
+        bin-links:
+          - "true"
+          - "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: Install globally into a user prefix
+        env:
+          npm_config_prefix: ${{ runner.temp }}/npm-global
+          npm_config_bin_links: ${{ matrix.bin-links }}
+        run: |
+          mkdir -p "$npm_config_prefix"
+          npm install -g ./nvicode-*.tgz
+          test -x "$npm_config_prefix/bin/nvicode"
+          "$npm_config_prefix/bin/nvicode" --help > /tmp/nvicode-help.txt
+          grep -q "nvicode select model" /tmp/nvicode-help.txt
