@@ -8,27 +8,112 @@ import { loadConfig } from "./config.js";
 const isTruthy = (value?: string): boolean =>
   value === "1" || value === "true" || value === "yes";
 
-const isGlobalInstall = (): boolean =>
-  process.env.npm_config_global === "true" ||
-  process.env.npm_config_location === "global";
-
 const isInteractive = (): boolean =>
   Boolean(process.stdin.isTTY && process.stdout.isTTY);
+
+const getPackageRoot = (): string =>
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const getCliPath = (): string =>
   path.join(path.dirname(fileURLToPath(import.meta.url)), "cli.js");
 
-const getGlobalBinDir = (): string | null => {
-  const prefix = process.env.npm_config_prefix || process.env.PREFIX;
-  if (!prefix) {
+const runNpmCommand = (args: string[]): string | null => {
+  const result = process.env.npm_execpath
+    ? spawnSync(process.execPath, [process.env.npm_execpath, ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+    : spawnSync("npm", args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+
+  if (result.status !== 0) {
     return null;
   }
 
-  return process.platform === "win32" ? prefix : path.join(prefix, "bin");
+  const output = result.stdout?.trim();
+  return output ? output : null;
+};
+
+const getContextFromPrefix = (prefix: string): { binDir: string; globalRoot: string } => ({
+  binDir: process.platform === "win32" ? prefix : path.join(prefix, "bin"),
+  globalRoot:
+    process.platform === "win32"
+      ? path.join(prefix, "node_modules")
+      : path.join(prefix, "lib", "node_modules"),
+});
+
+const getContextFromGlobalRoot = (globalRoot: string): { binDir: string; globalRoot: string } | null => {
+  if (process.platform === "win32") {
+    return {
+      binDir: path.dirname(globalRoot),
+      globalRoot,
+    };
+  }
+
+  const suffix = path.join("lib", "node_modules");
+  if (!globalRoot.endsWith(suffix)) {
+    return null;
+  }
+
+  const prefix = path.dirname(path.dirname(globalRoot));
+  return {
+    binDir: path.join(prefix, "bin"),
+    globalRoot,
+  };
+};
+
+const isWithinPath = (targetPath: string, parentPath: string): boolean => {
+  const relativePath = path.relative(parentPath, targetPath);
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+};
+
+const getGlobalBinDir = async (): Promise<string | null> => {
+  const packageRoot = await fs.realpath(getPackageRoot()).catch(() => getPackageRoot());
+  const contexts = new Map<string, { binDir: string; globalRoot: string }>();
+
+  const envPrefix = process.env.npm_config_prefix || process.env.PREFIX;
+  if (envPrefix) {
+    const context = getContextFromPrefix(envPrefix);
+    contexts.set(`${context.globalRoot}|${context.binDir}`, context);
+  }
+
+  const npmPrefix = runNpmCommand(["prefix", "-g"]);
+  if (npmPrefix) {
+    const context = getContextFromPrefix(npmPrefix);
+    contexts.set(`${context.globalRoot}|${context.binDir}`, context);
+  }
+
+  const npmGlobalRoot = runNpmCommand(["root", "-g"]);
+  if (npmGlobalRoot) {
+    const context = getContextFromGlobalRoot(npmGlobalRoot);
+    if (context) {
+      contexts.set(`${context.globalRoot}|${context.binDir}`, context);
+    }
+  }
+
+  for (const context of contexts.values()) {
+    const globalRoot = await fs.realpath(context.globalRoot).catch(() =>
+      path.resolve(context.globalRoot),
+    );
+    if (isWithinPath(packageRoot, globalRoot)) {
+      return context.binDir;
+    }
+  }
+
+  if (
+    process.env.npm_config_global === "true" ||
+    process.env.npm_config_location === "global"
+  ) {
+    return envPrefix ? getContextFromPrefix(envPrefix).binDir : null;
+  }
+
+  return null;
 };
 
 const createGlobalLauncher = async (): Promise<"created" | "skipped"> => {
-  const binDir = getGlobalBinDir();
+  const binDir = await getGlobalBinDir();
   if (!binDir) {
     return "skipped";
   }
@@ -69,10 +154,6 @@ const createGlobalLauncher = async (): Promise<"created" | "skipped"> => {
 
 const main = async (): Promise<void> => {
   if (isTruthy(process.env.NVICODE_SKIP_POSTINSTALL) || isTruthy(process.env.CI)) {
-    return;
-  }
-
-  if (!isGlobalInstall()) {
     return;
   }
 
