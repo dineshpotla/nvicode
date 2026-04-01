@@ -1,5 +1,11 @@
 # NviCode - Introducing one click Nvidia/OpenRouter keys to Claude Code. Free Claude code.
 
+[![CI](https://github.com/dineshpotla/nvicode/actions/workflows/ci.yml/badge.svg)](https://github.com/dineshpotla/nvicode/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/nvicode)](https://www.npmjs.com/package/nvicode)
+[![package](https://img.shields.io/badge/package-nvicode-orange)](https://www.npmjs.com/package/nvicode)
+[![node >=20](https://img.shields.io/badge/node-%3E%3D20-339933)](https://nodejs.org/)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
 Run Claude Code through NVIDIA-hosted models or OpenRouter using a simple CLI wrapper.
 Use top open-source model APIs on NVIDIA Build for free, with `nvicode` paced to `40 RPM` by default.
 
