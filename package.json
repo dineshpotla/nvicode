@@ -1,10 +1,13 @@
 {
   "name": "nvicode",
-  "version": "0.1.14",
-  "description": "NviCode - Introducing one click Nvidia/OpenRouter keys to Claude Code. Free Claude code.",
+  "version": "0.1.17",
+  "description": "Route Claude Code, Codex CLI, and OpenClaw through NVIDIA or OpenRouter with one setup.",
   "author": "Dinesh Potla",
   "keywords": [
     "claude-code",
+    "codex",
+    "openclaw",
+    "openrouter",
     "nvidia",
     "kimi",
     "qwen",

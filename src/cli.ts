@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { constants, openSync } from "node:fs";
 import { promises as fs } from "node:fs";
@@ -36,15 +37,17 @@ const usage = (): void => {
   console.log(`nvicode
 
 Commands:
-  nvicode select model        Guided provider, key, and model selection
-  nvicode models              Show recommended models for the active provider
-  nvicode auth                Save or update the API key for the active provider
-  nvicode config              Show current nvicode config
-  nvicode usage               Show token usage and cost comparison
-  nvicode activity            Show recent request activity
-  nvicode dashboard           Show usage summary and recent activity
-  nvicode launch claude [...] Launch Claude Code through nvicode
-  nvicode serve               Run the local proxy in the foreground
+  nvicode select model          Guided provider, key, and model selection
+  nvicode models                Show recommended models for the active provider
+  nvicode auth                  Save or update the API key for the active provider
+  nvicode config                Show current nvicode config
+  nvicode usage                 Show token usage and cost comparison
+  nvicode activity              Show recent request activity
+  nvicode dashboard             Show usage summary and recent activity
+  nvicode launch claude [...]   Launch Claude Code through nvicode
+  nvicode launch openclaw [...] Launch OpenClaw through nvicode
+  nvicode launch codex [...]    Launch Codex through nvicode
+  nvicode serve                 Run the local proxy in the foreground
 `);
 };
 
@@ -71,10 +74,25 @@ const getProviderLabel = (provider: ProviderId): string =>
 const getClaudeCommandNames = (): string[] =>
   isWindows ? ["claude.exe", "claude.cmd", "claude.bat", "claude"] : ["claude"];
 
+const getOpenClawCommandNames = (): string[] =>
+  isWindows
+    ? ["openclaw.exe", "openclaw.cmd", "openclaw.bat", "openclaw"]
+    : ["openclaw"];
+
+const getCodexCommandNames = (): string[] =>
+  isWindows
+    ? ["codex.exe", "codex.cmd", "codex.bat", "codex"]
+    : ["codex"];
+
 const getClaudeNativeNames = (): string[] =>
   isWindows
     ? ["claude-native.exe", "claude-native.cmd", "claude-native.bat", "claude-native"]
     : ["claude-native"];
+
+const getCodexNativeNames = (): string[] =>
+  isWindows
+    ? ["codex-native.exe", "codex-native.cmd", "codex-native.bat", "codex-native"]
+    : ["codex-native"];
 
 const pathExists = async (targetPath: string): Promise<boolean> => {
   try {
@@ -112,6 +130,24 @@ const renderClaudeWrapper = (): string => {
     "#!/bin/sh",
     `# ${NVICODE_WRAPPER_MARKER}`,
     `exec "${process.execPath}" "${__filename}" launch claude "$@"`,
+    "",
+  ].join("\n");
+};
+
+const renderCodexWrapper = (): string => {
+  if (isWindows) {
+    return [
+      "@echo off",
+      `REM ${NVICODE_WRAPPER_MARKER}`,
+      `"${process.execPath}" "${__filename}" launch codex %*`,
+      "",
+    ].join("\r\n");
+  }
+
+  return [
+    "#!/bin/sh",
+    `# ${NVICODE_WRAPPER_MARKER}`,
+    `exec "${process.execPath}" "${__filename}" launch codex "$@"`,
     "",
   ].join("\n");
 };
@@ -430,6 +466,29 @@ const getUsageView = async (): Promise<string> => {
 const sleep = async (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+const getNodeVersionParts = (): { major: number; minor: number; patch: number } => {
+  const parts = process.versions.node.split(".").map((part) => Number(part));
+  const major = parts[0] ?? 0;
+  const minor = parts[1] ?? 0;
+  const patch = parts[2] ?? 0;
+  return {
+    major: Number.isFinite(major) ? major : 0,
+    minor: Number.isFinite(minor) ? minor : 0,
+    patch: Number.isFinite(patch) ? patch : 0,
+  };
+};
+
+const isNodeAtLeast = (major: number, minor = 0, patch = 0): boolean => {
+  const current = getNodeVersionParts();
+  if (current.major !== major) {
+    return current.major > major;
+  }
+  if (current.minor !== minor) {
+    return current.minor > minor;
+  }
+  return current.patch >= patch;
+};
+
 const clearTerminal = (): void => {
   process.stdout.write("\x1b[2J\x1b[H");
 };
@@ -695,6 +754,82 @@ const ensurePersistentClaudeRouting = async (): Promise<"installed" | "updated" 
   return "installed";
 };
 
+const findExistingCodexNativeInDirectory = async (
+  directory: string,
+): Promise<string | null> => {
+  for (const name of getCodexNativeNames()) {
+    const candidate = path.join(directory, name);
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+};
+
+const resolvePersistentCodexCommand = async (): Promise<string | null> => {
+  for (const name of getCodexCommandNames()) {
+    const found = await findExecutableInPath(name);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+};
+
+const getCodexWrapperInstallPaths = async (
+  codexCommandPath: string,
+): Promise<{ wrapperPath: string; nativePath: string }> => {
+  const directory = path.dirname(codexCommandPath);
+  const existingNative = await findExistingCodexNativeInDirectory(directory);
+  if (existingNative) {
+    return { wrapperPath: codexCommandPath, nativePath: existingNative };
+  }
+
+  if (isWindows && path.extname(codexCommandPath).toLowerCase() === ".exe") {
+    return {
+      wrapperPath: path.join(directory, "codex.cmd"),
+      nativePath: path.join(directory, "codex-native.exe"),
+    };
+  }
+
+  const extension = path.extname(codexCommandPath);
+  return {
+    wrapperPath: codexCommandPath,
+    nativePath: path.join(directory, `codex-native${extension}`),
+  };
+};
+
+const ensurePersistentCodexRouting = async (): Promise<"installed" | "updated" | "already" | "skipped"> => {
+  const codexCommandPath = await resolvePersistentCodexCommand();
+  if (!codexCommandPath) {
+    return "skipped";
+  }
+
+  if (await isManagedClaudeWrapper(codexCommandPath)) {
+    const currentWrapper = await readIfExists(codexCommandPath);
+    const wrapperContents = renderCodexWrapper();
+    if (currentWrapper === wrapperContents) {
+      return "already";
+    }
+    await writeExecutableTextFile(codexCommandPath, wrapperContents);
+    return "updated";
+  }
+
+  const { wrapperPath, nativePath } = await getCodexWrapperInstallPaths(codexCommandPath);
+  const wrapperContents = renderCodexWrapper();
+
+  if (!(await pathExists(nativePath))) {
+    await fs.rename(codexCommandPath, nativePath);
+  } else if (codexCommandPath !== wrapperPath && await pathExists(wrapperPath)) {
+    await fs.rm(wrapperPath, { force: true });
+  } else if (codexCommandPath === wrapperPath) {
+    await fs.rm(wrapperPath, { force: true });
+  }
+
+  await writeExecutableTextFile(wrapperPath, wrapperContents);
+  return "installed";
+};
+
 const resolveClaudeBinary = async (): Promise<string> => {
   for (const name of getClaudeNativeNames()) {
     const nativeInPath = await findExecutableInPath(name);
@@ -749,6 +884,74 @@ const resolveClaudeBinary = async (): Promise<string> => {
   throw new Error("Unable to locate Claude Code binary.");
 };
 
+const resolveOpenClawBinary = async (): Promise<string> => {
+  const homeBinCandidates = isWindows
+    ? [
+        path.join(os.homedir(), ".local", "bin", "openclaw.exe"),
+        path.join(os.homedir(), ".local", "bin", "openclaw.cmd"),
+        path.join(os.homedir(), ".local", "bin", "openclaw.bat"),
+        path.join(os.homedir(), ".local", "bin", "openclaw"),
+      ]
+    : [path.join(os.homedir(), ".local", "bin", "openclaw")];
+
+  for (const candidate of homeBinCandidates) {
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const name of getOpenClawCommandNames()) {
+    const openclawInPath = await findExecutableInPath(name);
+    if (openclawInPath) {
+      return openclawInPath;
+    }
+  }
+
+  throw new Error(
+    "Unable to locate OpenClaw binary. Install OpenClaw first with `npm install -g openclaw@latest`.",
+  );
+};
+
+const resolveCodexBinary = async (): Promise<string> => {
+  for (const name of getCodexNativeNames()) {
+    const nativeInPath = await findExecutableInPath(name);
+    if (nativeInPath) {
+      return nativeInPath;
+    }
+  }
+
+  const homeBinCandidates = isWindows
+    ? [
+        path.join(os.homedir(), ".local", "bin", "codex-native.exe"),
+        path.join(os.homedir(), ".local", "bin", "codex-native"),
+        path.join(os.homedir(), ".local", "bin", "codex.exe"),
+        path.join(os.homedir(), ".local", "bin", "codex.cmd"),
+        path.join(os.homedir(), ".local", "bin", "codex.bat"),
+        path.join(os.homedir(), ".local", "bin", "codex"),
+      ]
+    : [
+        path.join(os.homedir(), ".local", "bin", "codex-native"),
+        path.join(os.homedir(), ".local", "bin", "codex"),
+      ];
+
+  for (const candidate of homeBinCandidates) {
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const name of getCodexCommandNames()) {
+    const codexInPath = await findExecutableInPath(name);
+    if (codexInPath && !(await isManagedClaudeWrapper(codexInPath))) {
+      return codexInPath;
+    }
+  }
+
+  throw new Error(
+    "Unable to locate Codex binary. Install Codex first with `npm install -g @openai/codex`.",
+  );
+};
+
 const findExecutableInPath = async (name: string): Promise<string | null> => {
   const pathEntries = (process.env.PATH || "").split(path.delimiter);
   for (const entry of pathEntries) {
@@ -762,6 +965,147 @@ const findExecutableInPath = async (name: string): Promise<string | null> => {
     }
   }
   return null;
+};
+
+const buildOpenClawEnv = (
+  baseEnv: NodeJS.ProcessEnv,
+  activeApiKey?: string,
+): NodeJS.ProcessEnv => ({
+  ...baseEnv,
+  ...(activeApiKey ? { CUSTOM_API_KEY: activeApiKey } : {}),
+});
+
+const getOpenClawPaths = () => {
+  const paths = getNvicodePaths();
+
+  return {
+    markerFile: path.join(paths.stateDir, "openclaw-profile.json"),
+  };
+};
+
+const getOpenClawProviderId = (config: NvicodeConfig): string =>
+  config.provider === "openrouter" ? "nvicode-openrouter" : "nvicode-nvidia";
+
+const getOpenClawModelPath = (config: NvicodeConfig): string =>
+  `${getOpenClawProviderId(config)}/${getActiveModel(config)}`;
+
+const getOpenClawProfileSignature = (
+  config: NvicodeConfig,
+  activeApiKey: string,
+): string =>
+  createHash("sha256")
+    .update(
+      JSON.stringify({
+        provider: config.provider,
+        model: getActiveModel(config),
+        apiKey: activeApiKey,
+      }),
+    )
+    .digest("hex");
+
+const runOpenClawCommand = async (
+  openclawBinary: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<void> => {
+  const child = spawnClaudeProcess(openclawBinary, args, env);
+
+  await new Promise<void>((resolve, reject) => {
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        reject(new Error(`OpenClaw exited with signal ${signal}`));
+        return;
+      }
+      if ((code ?? 0) !== 0) {
+        reject(new Error(`OpenClaw command failed with exit code ${code ?? 0}`));
+        return;
+      }
+      resolve();
+    });
+    child.on("error", reject);
+  });
+};
+
+const ensureOpenClawConfigured = async (
+  openclawBinary: string,
+  config: NvicodeConfig,
+  activeApiKey: string,
+): Promise<{ env: NodeJS.ProcessEnv; updated: boolean }> => {
+  if (!isNodeAtLeast(22, 14, 0)) {
+    throw new Error(
+      `OpenClaw requires Node.js >=22.14.0. Current version is ${process.versions.node}.`,
+    );
+  }
+
+  const openclawPaths = getOpenClawPaths();
+  const baseEnv = buildOpenClawEnv(process.env, activeApiKey);
+  await fs.mkdir(path.dirname(openclawPaths.markerFile), { recursive: true });
+
+  const profileSignature = getOpenClawProfileSignature(config, activeApiKey);
+  const existingMarkerRaw = await readIfExists(openclawPaths.markerFile);
+  if (existingMarkerRaw) {
+    try {
+      const parsed = JSON.parse(existingMarkerRaw) as { signature?: string };
+      if (parsed.signature === profileSignature) {
+        return { env: baseEnv, updated: false };
+      }
+    } catch {
+      // continue with reprovisioning
+    }
+  }
+
+  const providerId = getOpenClawProviderId(config);
+  const onboardArgs = [
+    "onboard",
+    "--non-interactive",
+    "--accept-risk",
+    "--flow",
+    "advanced",
+    "--auth-choice",
+    "custom-api-key",
+    "--custom-provider-id",
+    providerId,
+    "--custom-compatibility",
+    "openai",
+    "--custom-base-url",
+    config.provider === "openrouter"
+      ? "https://openrouter.ai/api/v1"
+      : "https://integrate.api.nvidia.com/v1",
+    "--custom-model-id",
+    getActiveModel(config),
+    "--no-install-daemon",
+    "--skip-channels",
+    "--skip-skills",
+    "--skip-health",
+    "--skip-ui",
+  ];
+
+  await runOpenClawCommand(
+    openclawBinary,
+    onboardArgs,
+    baseEnv,
+  );
+  await runOpenClawCommand(
+    openclawBinary,
+    ["config", "set", "agents.defaults.model.primary", JSON.stringify(getOpenClawModelPath(config))],
+    baseEnv,
+  );
+
+  await fs.writeFile(
+    openclawPaths.markerFile,
+    `${JSON.stringify(
+      {
+        signature: profileSignature,
+        provider: config.provider,
+        model: getActiveModel(config),
+        configuredAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  return { env: baseEnv, updated: true };
 };
 
 const spawnClaudeProcess = (
@@ -782,6 +1126,86 @@ const spawnClaudeProcess = (
     stdio: "inherit",
     env,
     windowsHide: true,
+  });
+};
+
+const runLaunchOpenClaw = async (args: string[]): Promise<void> => {
+  const config = await ensureConfigured();
+  const activeApiKey = getActiveApiKey(config);
+  const openclawBinary = await resolveOpenClawBinary();
+  const { env, updated } = await ensureOpenClawConfigured(
+    openclawBinary,
+    config,
+    activeApiKey,
+  );
+  if (updated) {
+    console.error(
+      "nvicode updated the default OpenClaw config. Restart the OpenClaw gateway to apply it: `openclaw gateway restart` (or `openclaw gateway run` for a foreground test).",
+    );
+  }
+  const child = spawnClaudeProcess(openclawBinary, args, env);
+
+  await new Promise<void>((resolve, reject) => {
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        reject(new Error(`OpenClaw exited with signal ${signal}`));
+        return;
+      }
+      process.exitCode = code ?? 0;
+      resolve();
+    });
+    child.on("error", reject);
+  });
+};
+
+const runLaunchCodex = async (args: string[]): Promise<void> => {
+  const config = await ensureConfigured();
+  const routingStatus = await ensurePersistentCodexRouting().catch(() => "skipped" as const);
+  const activeModel = getActiveModel(config);
+  const codexBinary = await resolveCodexBinary();
+
+  await ensureProxyRunning(config);
+
+  const proxyBaseUrl = `http://127.0.0.1:${config.proxyPort}/v1`;
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NVICODE_PROXY_TOKEN: config.proxyToken,
+  };
+
+  const hasModelFlag = args.includes("--model") || args.includes("-m");
+  const codexArgs = [
+    "-c", `model_provider="nvicode"`,
+    "-c", `model_providers.nvicode.name="nvicode proxy"`,
+    "-c", `model_providers.nvicode.base_url="${proxyBaseUrl}"`,
+    "-c", `model_providers.nvicode.env_key="NVICODE_PROXY_TOKEN"`,
+    "-c", `model_providers.nvicode.wire_api="responses"`,
+    "-c", `model_providers.nvicode.supports_websockets=false`,
+    ...(hasModelFlag ? [] : ["--model", activeModel]),
+    ...args,
+  ];
+
+  if (
+    process.stdout.isTTY &&
+    (routingStatus === "installed" || routingStatus === "updated")
+  ) {
+    console.error(
+      "nvicode installed persistent `codex` routing. Future plain `codex` launches will use the selected nvicode provider and model.",
+    );
+  }
+
+  const child = spawnClaudeProcess(codexBinary, codexArgs, env);
+
+  await new Promise<void>((resolve, reject) => {
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        reject(new Error(`Codex exited with signal ${signal}`));
+        return;
+      }
+      process.exitCode = code ?? 0;
+      resolve();
+    });
+    child.on("error", reject);
   });
 };
 
@@ -851,9 +1275,6 @@ const runLaunchClaude = async (args: string[]): Promise<void> => {
 
 const runServe = async (): Promise<void> => {
   const config = await ensureConfigured();
-  if (config.provider !== "nvidia") {
-    throw new Error("`nvicode serve` is only available for the NVIDIA provider.");
-  }
   const server = createProxyServer(config);
 
   await new Promise<void>((resolve, reject) => {
@@ -862,7 +1283,7 @@ const runServe = async (): Promise<void> => {
   });
 
   console.error(
-    `nvicode proxy listening on http://127.0.0.1:${config.proxyPort} using ${config.nvidiaModel}`,
+    `nvicode proxy listening on http://127.0.0.1:${config.proxyPort} using ${getActiveModel(config)} (${config.provider})`,
   );
 
   const shutdown = (): void => {
@@ -927,11 +1348,19 @@ const main = async (): Promise<void> => {
   }
 
   if (command === "launch") {
-    if (rest[0] !== "claude") {
-      throw new Error("Only `nvicode launch claude` is supported right now.");
+    if (rest[0] === "claude") {
+      await runLaunchClaude(rest.slice(1));
+      return;
     }
-    await runLaunchClaude(rest.slice(1));
-    return;
+    if (rest[0] === "openclaw") {
+      await runLaunchOpenClaw(rest.slice(1));
+      return;
+    }
+    if (rest[0] === "codex") {
+      await runLaunchCodex(rest.slice(1));
+      return;
+    }
+    throw new Error("Supported launch targets are `claude`, `openclaw`, and `codex`.");
   }
 
   throw new Error(`Unknown command: ${command}`);

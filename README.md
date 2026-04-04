@@ -1,4 +1,4 @@
-# NviCode - Introducing one click Nvidia/OpenRouter keys to Claude Code. Free Claude code.
+# NviCode
 
 [![CI](https://github.com/dineshpotla/nvicode/actions/workflows/ci.yml/badge.svg)](https://github.com/dineshpotla/nvicode/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/nvicode)](https://www.npmjs.com/package/nvicode)
@@ -6,9 +6,17 @@
 [![node >=20](https://img.shields.io/badge/node-%3E%3D20-339933)](https://nodejs.org/)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-Internally, `nvicode` sits between Claude Code and the selected provider.
-For NVIDIA, it starts a local Anthropic-compatible proxy that translates Claude Code requests to NVIDIA chat completions.
-For OpenRouter, it points Claude Code directly at OpenRouter's compatible endpoint and applies the selected model configuration.
+Route Claude Code, Codex CLI, and OpenClaw through NVIDIA or OpenRouter with one setup.
+
+`nvicode` lets you choose a provider once, save the API key once, pick a model once, and then launch the coding tool you want against that same backend.
+
+What it gives you:
+- One guided setup flow for provider, key, and model
+- Claude Code support
+- Codex CLI support
+- OpenClaw support
+- NVIDIA proxy mode with pacing and local usage tracking
+- OpenRouter direct mode for compatible models
 
 Supported environments:
 - macOS
@@ -18,37 +26,44 @@ Supported environments:
 
 ## Quickstart
 
-Install the published package:
+Install `nvicode`:
 
 ```sh
 npm install -g nvicode
 ```
 
-Set up provider, key, and model:
+Choose provider, key, and model:
 
 ```sh
 nvicode select model
 ```
 
-The setup flow asks for provider, API key, and model:
+Launch the tool you want:
+
+```sh
+nvicode launch claude
+nvicode launch codex
+nvicode launch openclaw
+```
+
+Provider setup:
 
 - NVIDIA: get a free key from [NVIDIA Build API Keys](https://build.nvidia.com/settings/api-keys)
 - OpenRouter: use your OpenRouter API key
 
-Launch Claude Code through your selected provider:
+What happens after first launch:
+- The first successful `nvicode launch claude` installs persistent plain `claude` routing.
+- The first successful `nvicode launch codex` installs persistent plain `codex` routing.
+- `nvicode launch openclaw` updates the default OpenClaw profile for the selected provider/model.
 
-```sh
-nvicode launch claude
-```
-
-The first successful `nvicode launch claude` also installs persistent plain-`claude` routing.
-After that, restarting your terminal or PC and running:
+After that, plain:
 
 ```sh
 claude
+codex
 ```
 
-will continue using your selected `nvicode` provider and model.
+continues using your selected `nvicode` provider and model.
 
 ## Screenshots
 
@@ -60,15 +75,35 @@ will continue using your selected `nvicode` provider and model.
 
 ![nvicode select model](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/select-model.png)
 
-### Launch Claude Code through your selected provider
+### Launch through your selected provider
 
 ![nvicode launch claude](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/launch.png)
 
-## Commands
+## How It Works
 
-Useful commands:
+- Claude Code:
+  - NVIDIA uses a local Anthropic-compatible proxy on `127.0.0.1:8788`
+  - OpenRouter connects directly to `https://openrouter.ai/api`
+- Codex CLI:
+  - uses the local `nvicode` proxy
+  - `nvicode` configures Codex to talk to that proxy through the Responses API
+- OpenClaw:
+  - updates the default OpenClaw config for the selected provider/model
+  - restart the gateway after config changes:
 
 ```sh
+openclaw gateway restart
+```
+
+## Commands
+
+Common commands:
+
+```sh
+nvicode select model
+nvicode launch claude
+nvicode launch codex
+nvicode launch openclaw
 nvicode dashboard
 nvicode usage
 nvicode activity
@@ -76,25 +111,29 @@ nvicode models
 nvicode config
 nvicode auth
 nvicode launch claude -p "Reply with exactly OK"
+nvicode launch codex "Explain this project"
 ```
 
-Provider behavior:
-- NVIDIA: starts a local proxy on `127.0.0.1:8788`, points Claude Code at it with `ANTHROPIC_BASE_URL`, and forwards requests to NVIDIA `chat/completions`.
-- OpenRouter: points Claude Code directly at `https://openrouter.ai/api` using OpenRouter credentials and Anthropic-compatible model ids.
+Behavior notes:
+- `nvicode select model` asks for provider, optional API key update, and model choice in one guided flow.
+- Claude Code uses direct OpenRouter mode for OpenRouter, and proxy mode for NVIDIA.
+- Codex currently uses the local `nvicode` proxy path.
+- `nvicode usage`, `activity`, and `dashboard` are currently focused on NVIDIA proxy sessions.
+- OpenRouter does not currently produce the same local usage visibility as the NVIDIA proxy flow.
+- NVIDIA requests are paced to `40 RPM` by default. Override with `NVICODE_MAX_RPM` if your account allows more.
 
 In an interactive terminal, `nvicode usage` refreshes live every 2 seconds. When piped or redirected, it prints a single snapshot.
 
-`nvicode select model` now asks for provider, optional API key update, and model choice in one guided flow.
-If no API key is saved for the active provider yet, `nvicode` prompts for one on first use.
-By default, the proxy paces upstream NVIDIA requests at `40 RPM`. Override that with `NVICODE_MAX_RPM` if your account has a different limit.
 The usage dashboard compares your local NVIDIA run cost against Claude Opus 4.6 at `$5 / MTok input` and `$25 / MTok output`, based on Anthropic pricing as of `2026-03-30`.
 If your NVIDIA endpoint is not free, override local cost estimates with `NVICODE_INPUT_USD_PER_MTOK` and `NVICODE_OUTPUT_USD_PER_MTOK`.
-Local `usage`, `activity`, and `dashboard` commands are available for NVIDIA proxy sessions. OpenRouter sessions use OpenRouter's direct connection path instead.
 
 ## Requirements
 
-- Claude Code must already be installed on the machine.
+- Claude Code must already be installed to use `nvicode launch claude`.
+- Codex must already be installed to use `nvicode launch codex`. Install with `npm install -g @openai/codex`.
+- OpenClaw must already be installed to use `nvicode launch openclaw`. Install with `npm install -g openclaw@latest`.
 - Node.js 20 or newer is required to install `nvicode`.
+- OpenClaw itself requires Node.js `>=22.14.0`.
 - On native Windows, Claude Code itself requires Git for Windows. See the [Claude Code setup docs](https://code.claude.com/docs/en/setup).
 
 ## Local Development
@@ -112,4 +151,4 @@ npm link
 - `thinking` is disabled by default because some NVIDIA reasoning models can consume the entire output budget and return no visible answer to Claude Code.
 - The proxy supports basic text, tool calls, tool results, and token count estimation.
 - The proxy includes upstream request pacing and retries on NVIDIA `429` responses.
-- Claude Code remains the frontend; the selected provider/model becomes the backend.
+- Claude Code, Codex CLI, and OpenClaw remain the frontends; the selected provider/model becomes the backend.

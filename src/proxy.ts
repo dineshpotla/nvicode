@@ -5,7 +5,7 @@ import {
   buildUsageRecord,
   getPricingSnapshot,
 } from "./usage.js";
-import type { NvicodeConfig } from "./config.js";
+import { getActiveApiKey, getActiveModel, type NvicodeConfig } from "./config.js";
 
 interface AnthropicTextBlock {
   type: "text";
@@ -119,6 +119,7 @@ interface OpenAIResponse {
 }
 
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_RETRY_DELAY_MS = 2_000;
 const MAX_NVIDIA_RETRIES = 3;
 
@@ -683,6 +684,382 @@ const callNvidia = async (
   };
 };
 
+interface ResponsesInputMessage {
+  role: "user" | "assistant" | "system" | "developer";
+  content: string | Array<{ type: string; text?: string; image_url?: string }>;
+}
+
+interface ResponsesInputFunctionCall {
+  type: "function_call";
+  call_id: string;
+  name: string;
+  arguments: string;
+  id?: string;
+  status?: string;
+}
+
+interface ResponsesInputFunctionOutput {
+  type: "function_call_output";
+  call_id: string;
+  output: string;
+}
+
+type ResponsesInputItem =
+  | ResponsesInputMessage
+  | ResponsesInputFunctionCall
+  | ResponsesInputFunctionOutput;
+
+interface ResponsesFunctionTool {
+  type: "function";
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  strict?: boolean;
+}
+
+interface ResponsesRequest {
+  model?: string;
+  input: ResponsesInputItem[];
+  tools?: ResponsesFunctionTool[];
+  stream?: boolean;
+  temperature?: number;
+  top_p?: number;
+  max_output_tokens?: number;
+  tool_choice?: unknown;
+}
+
+interface ResponsesOutputText {
+  type: "output_text";
+  text: string;
+}
+
+interface ResponsesOutputMessage {
+  type: "message";
+  id: string;
+  role: "assistant";
+  status: "completed" | "in_progress";
+  content: ResponsesOutputText[];
+}
+
+interface ResponsesOutputFunctionCall {
+  type: "function_call";
+  id: string;
+  call_id: string;
+  name: string;
+  arguments: string;
+  status: "completed" | "in_progress";
+}
+
+type ResponsesOutputItem = ResponsesOutputMessage | ResponsesOutputFunctionCall;
+
+interface ResponsesApiResponse {
+  id: string;
+  object: "response";
+  created_at: number;
+  status: "completed" | "failed" | "in_progress";
+  model: string;
+  output: ResponsesOutputItem[];
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+  };
+}
+
+const isInputMessage = (item: ResponsesInputItem): item is ResponsesInputMessage =>
+  "role" in item &&
+  (!("type" in item) || (item as { type?: string }).type === "message");
+
+const translateResponsesInputToMessages = (
+  input: ResponsesInputItem[],
+): OpenAIMessage[] => {
+  const messages: OpenAIMessage[] = [];
+  let pendingToolCalls: OpenAIToolCall[] = [];
+
+  const flushPendingToolCalls = (): void => {
+    if (pendingToolCalls.length > 0) {
+      messages.push({
+        role: "assistant",
+        content: null,
+        tool_calls: pendingToolCalls,
+      });
+      pendingToolCalls = [];
+    }
+  };
+
+  for (const item of input) {
+    if (isInputMessage(item)) {
+      flushPendingToolCalls();
+      const role = item.role === "developer" ? "system" as const : item.role;
+      if (typeof item.content === "string") {
+        messages.push({ role, content: item.content });
+      } else {
+        const parts: OpenAIContentPart[] = item.content.map((part) => {
+          if (part.type === "input_image" && part.image_url) {
+            return { type: "image_url" as const, image_url: { url: part.image_url } };
+          }
+          return { type: "text" as const, text: part.text || "" };
+        });
+        messages.push({ role, content: parts });
+      }
+      continue;
+    }
+
+    if (item.type === "function_call") {
+      pendingToolCalls.push({
+        id: item.call_id,
+        type: "function",
+        function: { name: item.name, arguments: item.arguments },
+      });
+      continue;
+    }
+
+    if (item.type === "function_call_output") {
+      flushPendingToolCalls();
+      messages.push({
+        role: "tool",
+        tool_call_id: item.call_id,
+        content: item.output,
+      });
+    }
+  }
+
+  flushPendingToolCalls();
+  return messages;
+};
+
+const translateResponsesTools = (
+  tools: ResponsesFunctionTool[] | undefined,
+): unknown[] | undefined => {
+  if (!tools || tools.length === 0) return undefined;
+  return tools
+    .filter((t) => t.type === "function")
+    .map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters ?? { type: "object", properties: {} },
+        ...(t.strict !== undefined ? { strict: t.strict } : {}),
+      },
+    }));
+};
+
+const buildResponsesApiResponse = (
+  upstream: OpenAIResponse,
+  requestModel: string,
+): ResponsesApiResponse => {
+  const choice = upstream.choices?.[0];
+  const output: ResponsesOutputItem[] = [];
+
+  const messageContent = choice?.message?.content;
+  const text =
+    typeof messageContent === "string"
+      ? messageContent
+      : Array.isArray(messageContent)
+        ? messageContent
+            .map((p) => (typeof p.text === "string" ? p.text : ""))
+            .filter(Boolean)
+            .join("\n")
+        : "";
+
+  if (
+    text.length > 0 ||
+    (!choice?.message?.tool_calls?.length &&
+      !choice?.message?.reasoning?.trim())
+  ) {
+    const finalText =
+      text.length > 0
+        ? text
+        : choice?.message?.reasoning?.trim() || "";
+    output.push({
+      type: "message",
+      id: `msg_${randomUUID()}`,
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: finalText }],
+    });
+  }
+
+  for (const tc of choice?.message?.tool_calls ?? []) {
+    const name = tc.function?.name;
+    if (!name) continue;
+    output.push({
+      type: "function_call",
+      id: `fc_${randomUUID()}`,
+      call_id: tc.id || `call_${randomUUID()}`,
+      name,
+      arguments: tc.function?.arguments || "{}",
+      status: "completed",
+    });
+  }
+
+  if (output.length === 0) {
+    output.push({
+      type: "message",
+      id: `msg_${randomUUID()}`,
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "" }],
+    });
+  }
+
+  return {
+    id: upstream.id || `resp_${randomUUID()}`,
+    object: "response",
+    created_at: Math.floor(Date.now() / 1000),
+    status: "completed",
+    model: requestModel,
+    output,
+    usage: {
+      input_tokens: upstream.usage?.prompt_tokens ?? 0,
+      output_tokens: upstream.usage?.completion_tokens ?? 0,
+      total_tokens:
+        (upstream.usage?.prompt_tokens ?? 0) +
+        (upstream.usage?.completion_tokens ?? 0),
+    },
+  };
+};
+
+const writeResponsesSseEvent = (
+  response: ServerResponse,
+  type: string,
+  payload: Record<string, unknown>,
+): void => {
+  response.write(`data: ${JSON.stringify({ type, ...payload })}\n\n`);
+};
+
+const streamResponsesApiResponse = (
+  response: ServerResponse,
+  apiResponse: ResponsesApiResponse,
+): void => {
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  writeResponsesSseEvent(response, "response.created", {
+    response: { ...apiResponse, output: [], status: "in_progress" },
+  });
+
+  for (let i = 0; i < apiResponse.output.length; i++) {
+    const item = apiResponse.output[i]!;
+
+    if (item.type === "message") {
+      writeResponsesSseEvent(response, "response.output_item.added", {
+        output_index: i,
+        item: { ...item, content: [], status: "in_progress" },
+      });
+
+      for (let j = 0; j < item.content.length; j++) {
+        const part = item.content[j]!;
+
+        writeResponsesSseEvent(response, "response.content_part.added", {
+          output_index: i,
+          content_index: j,
+          part: { type: "output_text", text: "" },
+        });
+
+        for (const chunk of chunkText(part.text)) {
+          writeResponsesSseEvent(response, "response.output_text.delta", {
+            output_index: i,
+            content_index: j,
+            delta: chunk,
+          });
+        }
+
+        writeResponsesSseEvent(response, "response.output_text.done", {
+          output_index: i,
+          content_index: j,
+          text: part.text,
+        });
+
+        writeResponsesSseEvent(response, "response.content_part.done", {
+          output_index: i,
+          content_index: j,
+          part,
+        });
+      }
+
+      writeResponsesSseEvent(response, "response.output_item.done", {
+        output_index: i,
+        item: { ...item, status: "completed" },
+      });
+    } else if (item.type === "function_call") {
+      writeResponsesSseEvent(response, "response.output_item.added", {
+        output_index: i,
+        item: { ...item, arguments: "", status: "in_progress" },
+      });
+
+      writeResponsesSseEvent(
+        response,
+        "response.function_call_arguments.delta",
+        { output_index: i, delta: item.arguments },
+      );
+
+      writeResponsesSseEvent(
+        response,
+        "response.function_call_arguments.done",
+        { output_index: i, arguments: item.arguments },
+      );
+
+      writeResponsesSseEvent(response, "response.output_item.done", {
+        output_index: i,
+        item: { ...item, status: "completed" },
+      });
+    }
+  }
+
+  writeResponsesSseEvent(response, "response.completed", {
+    response: apiResponse,
+  });
+
+  response.end();
+};
+
+const getUpstreamChatUrl = (config: NvicodeConfig): string =>
+  config.provider === "openrouter" ? OPENROUTER_URL : NVIDIA_URL;
+
+const callChatCompletions = async (
+  config: NvicodeConfig,
+  scheduleRequest: <T>(task: () => Promise<T>) => Promise<T>,
+  body: Record<string, unknown>,
+): Promise<OpenAIResponse> => {
+  const upstreamUrl = getUpstreamChatUrl(config);
+  const apiKey = getActiveApiKey(config);
+
+  const invoke = async (): Promise<OpenAIResponse> => {
+    for (let attempt = 0; attempt <= MAX_NVIDIA_RETRIES; attempt += 1) {
+      const resp = await fetch(upstreamUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      const raw = await resp.text();
+      if (resp.ok) return JSON.parse(raw) as OpenAIResponse;
+
+      if (resp.status === 429 && attempt < MAX_NVIDIA_RETRIES) {
+        const retryMs =
+          parseRetryAfterMs(resp.headers.get("retry-after")) ||
+          DEFAULT_RETRY_DELAY_MS * 2 ** attempt;
+        await sleep(retryMs);
+        continue;
+      }
+
+      throw new Error(`Upstream API HTTP ${resp.status}: ${raw}`);
+    }
+    throw new Error("Upstream API retry loop exhausted unexpectedly.");
+  };
+
+  return scheduleRequest(invoke);
+};
+
 export const createProxyServer = (config: NvicodeConfig): Server => {
   const scheduleNvidiaRequest = createRequestScheduler(config.maxRequestsPerMinute);
   return createServer(async (request, response) => {
@@ -898,6 +1275,52 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
           );
           throw error;
         }
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/responses") {
+
+        const rawBody = await readRequestBody(request);
+        const payload = JSON.parse(rawBody) as ResponsesRequest;
+        const targetModel = payload.model || getActiveModel(config);
+
+        const chatBody: Record<string, unknown> = {
+          model: targetModel,
+          messages: translateResponsesInputToMessages(payload.input),
+          max_tokens: payload.max_output_tokens ?? 16_384,
+          stream: false,
+        };
+
+        if (typeof payload.temperature === "number") {
+          chatBody.temperature = payload.temperature;
+        }
+        if (typeof payload.top_p === "number") {
+          chatBody.top_p = payload.top_p;
+        }
+
+        const tools = translateResponsesTools(payload.tools);
+        if (tools) chatBody.tools = tools;
+
+        try {
+          const upstream = await callChatCompletions(
+            config,
+            scheduleNvidiaRequest,
+            chatBody,
+          );
+
+          const apiResponse = buildResponsesApiResponse(upstream, targetModel);
+
+          if (payload.stream === false) {
+            sendJson(response, 200, apiResponse);
+          } else {
+            streamResponsesApiResponse(response, apiResponse);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          sendJson(response, 502, {
+            error: { message: msg, type: "upstream_error", code: "upstream_error" },
+          });
+        }
+        return;
       }
 
       sendAnthropicError(
