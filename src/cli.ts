@@ -244,6 +244,16 @@ const promptApiKeyUpdate = async (
     : { nvidiaApiKey: nextKey, openrouterApiKey: config.openrouterApiKey };
 };
 
+const promptRequiredApiKey = async (
+  providerLabel: string,
+): Promise<string> => {
+  const apiKey = await question(`${providerLabel} API key: `);
+  if (!apiKey) {
+    throw new Error(`${providerLabel} API key is required.`);
+  }
+  return apiKey;
+};
+
 const ensureConfigured = async (): Promise<NvicodeConfig> => {
   let config = await loadConfig();
   let changed = false;
@@ -255,10 +265,8 @@ const ensureConfigured = async (): Promise<NvicodeConfig> => {
     if (!process.stdin.isTTY) {
       throw new Error(`Missing ${providerLabel} API key. Run \`nvicode auth\` first.`);
     }
-    const apiKey = await question(`${providerLabel} API key: `);
-    if (!apiKey) {
-      throw new Error(`${providerLabel} API key is required.`);
-    }
+    console.error(`Missing ${providerLabel} API key. Enter it now to continue.`);
+    const apiKey = await promptRequiredApiKey(providerLabel);
     config = {
       ...config,
       ...(config.provider === "openrouter"
@@ -266,6 +274,7 @@ const ensureConfigured = async (): Promise<NvicodeConfig> => {
         : { nvidiaApiKey: apiKey }),
     };
     changed = true;
+    console.error(`Saved ${providerLabel} API key. Continuing launch.`);
   }
 
   if (!activeModel) {
@@ -290,18 +299,13 @@ const runAuth = async (): Promise<void> => {
   const config = await loadConfig();
   const providerLabel = getProviderLabel(config.provider);
   const currentApiKey = getActiveApiKey(config);
-  const apiKey = await question(
-    currentApiKey
-      ? `${providerLabel} API key (leave blank to keep current): `
-      : `${providerLabel} API key: `,
-  );
+  const apiKey = currentApiKey
+    ? await question(`${providerLabel} API key (leave blank to keep current): `)
+    : await promptRequiredApiKey(providerLabel);
 
   if (!apiKey && currentApiKey) {
     console.log(`Kept existing ${providerLabel} API key.`);
     return;
-  }
-  if (!apiKey) {
-    throw new Error(`${providerLabel} API key is required.`);
   }
 
   await saveConfig({
