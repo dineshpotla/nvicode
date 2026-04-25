@@ -122,12 +122,36 @@ const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_RETRY_DELAY_MS = 2_000;
 const MAX_NVIDIA_RETRIES = 3;
+const UPSTREAM_TIMEOUT_MS = 60_000;
+const PROXY_PROTOCOL_VERSION = 2;
 
 const sleep = async (ms: number): Promise<void> => {
   if (ms <= 0) {
     return;
   }
   await new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+const fetchWithTimeout = async (
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if ((error as Error).name === "AbortError") {
+      throw new Error(`Upstream API timed out after ${UPSTREAM_TIMEOUT_MS / 1000}s`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 const parseRetryAfterMs = (value: string | null): number | null => {
@@ -641,15 +665,15 @@ const callNvidia = async (
     requestBody.tool_choice = toolChoice;
   }
 
-  if (config.thinking) {
+  if (config.provider === "nvidia") {
     requestBody.chat_template_kwargs = {
-      thinking: true,
+      thinking: config.thinking,
     };
   }
 
   const invoke = async (): Promise<OpenAIResponse> => {
     for (let attempt = 0; attempt <= MAX_NVIDIA_RETRIES; attempt += 1) {
-      const response = await fetch(NVIDIA_URL, {
+      const response = await fetchWithTimeout(NVIDIA_URL, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${config.nvidiaApiKey}`,
@@ -1031,7 +1055,7 @@ const callChatCompletions = async (
 
   const invoke = async (): Promise<OpenAIResponse> => {
     for (let attempt = 0; attempt <= MAX_NVIDIA_RETRIES; attempt += 1) {
-      const resp = await fetch(upstreamUrl, {
+      const resp = await fetchWithTimeout(upstreamUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -1075,7 +1099,9 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
       if (url.pathname === "/health") {
         sendJson(response, 200, {
           ok: true,
-          model: config.nvidiaModel,
+          proxyProtocolVersion: PROXY_PROTOCOL_VERSION,
+          provider: config.provider,
+          model: getActiveModel(config),
           port: config.proxyPort,
           thinking: config.thinking,
           maxRequestsPerMinute: config.maxRequestsPerMinute,
@@ -1289,6 +1315,12 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
           max_tokens: payload.max_output_tokens ?? 16_384,
           stream: false,
         };
+
+        if (config.provider === "nvidia") {
+          chatBody.chat_template_kwargs = {
+            thinking: config.thinking,
+          };
+        }
 
         if (typeof payload.temperature === "number") {
           chatBody.temperature = payload.temperature;

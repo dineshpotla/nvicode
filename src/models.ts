@@ -23,9 +23,9 @@ export const NVIDIA_CURATED_MODELS: ModelOption[] = [
     description: "General purpose reasoning model with code capability.",
   },
   {
-    id: "deepseek-ai/deepseek-v3.2",
-    label: "DeepSeek V3.2",
-    description: "General coding and reasoning model.",
+    id: "deepseek-ai/deepseek-v4-flash",
+    label: "DeepSeek V4 Flash",
+    description: "Responsive DeepSeek V4-family model.",
   },
   {
     id: "mistralai/codestral-22b-instruct-v0.1",
@@ -36,6 +36,45 @@ export const NVIDIA_CURATED_MODELS: ModelOption[] = [
     id: "qwen/qwen2.5-coder-32b-instruct",
     label: "Qwen2.5 Coder 32B",
     description: "Smaller coding-focused Qwen model.",
+  },
+];
+
+interface NvidiaModelFamily {
+  name: string;
+  labelPrefix: string;
+  description: string;
+  match: RegExp;
+  prefer: RegExp[];
+}
+
+const NVIDIA_MODEL_FAMILIES: NvidiaModelFamily[] = [
+  {
+    name: "Kimi",
+    labelPrefix: "Kimi",
+    description: "Latest available Kimi model from NVIDIA.",
+    match: /^moonshotai\/kimi/i,
+    prefer: [/k2\.5/i, /thinking/i, /instruct/i],
+  },
+  {
+    name: "DeepSeek",
+    labelPrefix: "DeepSeek",
+    description: "Latest available DeepSeek model from NVIDIA.",
+    match: /^deepseek-ai\/deepseek/i,
+    prefer: [/v4-flash/i, /v4-pro/i, /v4/i, /v3\.2/i, /coder/i],
+  },
+  {
+    name: "GLM",
+    labelPrefix: "GLM",
+    description: "Latest available GLM model from NVIDIA.",
+    match: /^z-ai\/glm/i,
+    prefer: [/5\.1/i, /5/i, /4\.7/i],
+  },
+  {
+    name: "Qwen",
+    labelPrefix: "Qwen",
+    description: "Latest available Qwen coding model from NVIDIA.",
+    match: /^qwen\/qwen/i,
+    prefer: [/qwen3-coder/i, /qwen3\.5/i, /qwen3-next/i, /qwen3/i, /qwen2\.5-coder/i],
   },
 ];
 
@@ -92,6 +131,98 @@ export const fetchAvailableModelIds = async (
   return ids;
 };
 
+const formatModelNameToken = (part: string): string => {
+  const normalized = part.toLowerCase();
+  const brandNames: Record<string, string> = {
+    deepseek: "DeepSeek",
+    glm: "GLM",
+    kimi: "Kimi",
+    qwen: "Qwen",
+  };
+  if (brandNames[normalized]) {
+    return brandNames[normalized];
+  }
+  if (/^[vk]\d/i.test(part) || /^\d+b$/i.test(part) || /^a\d+b$/i.test(part)) {
+    return part.toUpperCase();
+  }
+  return part.charAt(0).toUpperCase() + part.slice(1);
+};
+
+const titleCaseModelPart = (value: string): string =>
+  value
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map(formatModelNameToken)
+    .join(" ");
+
+const formatDynamicLabel = (
+  family: NvidiaModelFamily,
+  id: string,
+): string => {
+  const modelName = id.split("/").at(-1) || id;
+  return `${family.labelPrefix}: ${titleCaseModelPart(modelName)}`;
+};
+
+const getVersionScore = (id: string): number => {
+  const versionNumbers = [...id.matchAll(/\d+(?:\.\d+)?/g)]
+    .map((match) => Number(match[0]))
+    .filter((value) => Number.isFinite(value));
+  if (versionNumbers.length === 0) {
+    return 0;
+  }
+  return Math.max(...versionNumbers);
+};
+
+const scoreFamilyModel = (
+  family: NvidiaModelFamily,
+  id: string,
+): number => {
+  let score = getVersionScore(id);
+  family.prefer.forEach((pattern, index) => {
+    if (pattern.test(id)) {
+      score += (family.prefer.length - index) * 1000;
+    }
+  });
+  if (/preview|beta|experimental/i.test(id)) {
+    score -= 10;
+  }
+  return score;
+};
+
+const pickFamilyModel = (
+  family: NvidiaModelFamily,
+  ids: string[],
+): ModelOption | null => {
+  const candidates = ids.filter((id) => family.match.test(id));
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const [best] = candidates.sort((left, right) => {
+    const scoreDelta = scoreFamilyModel(family, right) - scoreFamilyModel(family, left);
+    return scoreDelta || right.localeCompare(left, undefined, { numeric: true });
+  });
+  if (!best) {
+    return null;
+  }
+
+  return {
+    id: best,
+    label: formatDynamicLabel(family, best),
+    description: family.description,
+  };
+};
+
+const getDynamicNvidiaModels = (available: Set<string>): ModelOption[] => {
+  const ids = [...available];
+  const picked = NVIDIA_MODEL_FAMILIES
+    .map((family) => pickFamilyModel(family, ids))
+    .filter((model): model is ModelOption => Boolean(model));
+  const seen = new Set(picked.map((model) => model.id));
+  const fallback = NVIDIA_CURATED_MODELS.filter((model) => available.has(model.id) && !seen.has(model.id));
+  return [...picked, ...fallback];
+};
+
 export const getRecommendedModels = async (
   provider: ProviderId,
   apiKey: string,
@@ -102,8 +233,8 @@ export const getRecommendedModels = async (
 
   try {
     const available = await fetchAvailableModelIds(apiKey);
-    const curated = NVIDIA_CURATED_MODELS.filter((model) => available.has(model.id));
-    return curated.length > 0 ? curated : NVIDIA_CURATED_MODELS;
+    const dynamic = getDynamicNvidiaModels(available);
+    return dynamic.length > 0 ? dynamic : NVIDIA_CURATED_MODELS;
   } catch {
     return NVIDIA_CURATED_MODELS;
   }

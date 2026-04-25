@@ -584,11 +584,35 @@ const runDashboard = async (): Promise<void> => {
   await runActivity();
 };
 
-const waitForHealthyProxy = async (port: number): Promise<boolean> => {
+const PROXY_PROTOCOL_VERSION = 2;
+
+interface ProxyHealthResponse {
+  ok?: boolean;
+  proxyProtocolVersion?: number;
+  provider?: ProviderId;
+  model?: string;
+  port?: number;
+  thinking?: boolean;
+  maxRequestsPerMinute?: number;
+}
+
+const isExpectedProxyHealth = (
+  config: NvicodeConfig,
+  health: ProxyHealthResponse,
+): boolean =>
+  health.ok === true &&
+  health.proxyProtocolVersion === PROXY_PROTOCOL_VERSION &&
+  health.provider === config.provider &&
+  health.model === getActiveModel(config) &&
+  health.port === config.proxyPort &&
+  health.thinking === config.thinking &&
+  health.maxRequestsPerMinute === config.maxRequestsPerMinute;
+
+const waitForHealthyProxy = async (config: NvicodeConfig): Promise<boolean> => {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`);
-      if (response.ok) {
+      const response = await fetch(`http://127.0.0.1:${config.proxyPort}/health`);
+      if (response.ok && isExpectedProxyHealth(config, await response.json() as ProxyHealthResponse)) {
         return true;
       }
     } catch {
@@ -599,12 +623,37 @@ const waitForHealthyProxy = async (port: number): Promise<boolean> => {
   return false;
 };
 
+const stopExistingProxy = async (): Promise<void> => {
+  const paths = getNvicodePaths();
+  const rawPid = await readIfExists(paths.pidFile);
+  const pid = Number(rawPid?.trim());
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } catch {
+      break;
+    }
+  }
+};
+
 const ensureProxyRunning = async (config: NvicodeConfig): Promise<void> => {
-  if (await waitForHealthyProxy(config.proxyPort)) {
+  if (await waitForHealthyProxy(config)) {
     return;
   }
 
   const paths = getNvicodePaths();
+  await stopExistingProxy();
   await fs.mkdir(paths.stateDir, { recursive: true });
   const logFd = openSync(paths.logFile, "a");
 
@@ -620,7 +669,7 @@ const ensureProxyRunning = async (config: NvicodeConfig): Promise<void> => {
 
   await fs.writeFile(paths.pidFile, `${child.pid}\n`);
 
-  if (!(await waitForHealthyProxy(config.proxyPort))) {
+  if (!(await waitForHealthyProxy(config))) {
     throw new Error(`nvicode proxy failed to start. See ${paths.logFile}`);
   }
 };
@@ -685,6 +734,34 @@ const resolvePersistentClaudeCommand = async (): Promise<string | null> => {
     if (found) {
       return found;
     }
+  }
+
+  return null;
+};
+
+const resolveLatestClaudeManagedVersion = async (): Promise<string | null> => {
+  const versionsDir = path.join(os.homedir(), ".local", "share", "claude", "versions");
+  try {
+    const entries = await fs.readdir(versionsDir);
+    const sortedEntries = entries.sort((left, right) =>
+      left.localeCompare(right, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    );
+
+    for (let index = sortedEntries.length - 1; index >= 0; index -= 1) {
+      const entry = sortedEntries[index];
+      if (!entry) {
+        continue;
+      }
+      const resolved = await resolveClaudeVersionEntry(path.join(versionsDir, entry));
+      if (resolved) {
+        return resolved;
+      }
+    }
+  } catch {
+    // continue with other install layouts
   }
 
   return null;
@@ -835,6 +912,11 @@ const ensurePersistentCodexRouting = async (): Promise<"installed" | "updated" |
 };
 
 const resolveClaudeBinary = async (): Promise<string> => {
+  const latestManagedVersion = await resolveLatestClaudeManagedVersion();
+  if (latestManagedVersion) {
+    return latestManagedVersion;
+  }
+
   for (const name of getClaudeNativeNames()) {
     const nativeInPath = await findExecutableInPath(name);
     if (nativeInPath) {
@@ -854,28 +936,9 @@ const resolveClaudeBinary = async (): Promise<string> => {
         path.join(os.homedir(), ".local", "bin", "claude"),
       ];
   for (const candidate of homeBinCandidates) {
-    if (await isExecutable(candidate)) {
+    if ((await isExecutable(candidate)) && !(await isManagedClaudeWrapper(candidate))) {
       return candidate;
     }
-  }
-
-  const versionsDir = path.join(os.homedir(), ".local", "share", "claude", "versions");
-  try {
-    const entries = await fs.readdir(versionsDir);
-    const latest = entries.sort((left, right) =>
-      left.localeCompare(right, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      }),
-    ).at(-1);
-    if (latest) {
-      const resolved = await resolveClaudeVersionEntry(path.join(versionsDir, latest));
-      if (resolved) {
-        return resolved;
-      }
-    }
-  } catch {
-    // continue
   }
 
   for (const name of getClaudeCommandNames()) {

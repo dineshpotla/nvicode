@@ -1,4 +1,4 @@
-# NviCode
+# Nvicode - Free unlimited claudecode 40RPM
 
 [![CI](https://github.com/dineshpotla/nvicode/actions/workflows/ci.yml/badge.svg)](https://github.com/dineshpotla/nvicode/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/nvicode)](https://www.npmjs.com/package/nvicode)
@@ -17,6 +17,7 @@ What it gives you:
 - OpenClaw support
 - NVIDIA proxy mode with pacing and local usage tracking
 - OpenRouter direct mode for compatible models
+- Dynamic NVIDIA model discovery for current Kimi, DeepSeek, GLM, and Qwen picks
 
 Supported environments:
 - macOS
@@ -116,6 +117,7 @@ nvicode launch codex "Explain this project"
 
 Behavior notes:
 - `nvicode select model` asks for provider, optional API key update, and model choice in one guided flow.
+- For NVIDIA, model selection fetches the live NVIDIA catalog and highlights one current top pick each from Kimi, DeepSeek, GLM, and Qwen before falling back to curated defaults.
 - Claude Code uses direct OpenRouter mode for OpenRouter, and proxy mode for NVIDIA.
 - Codex currently uses the local `nvicode` proxy path.
 - `nvicode usage`, `activity`, and `dashboard` are currently focused on NVIDIA proxy sessions.

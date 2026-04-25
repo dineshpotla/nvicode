@@ -36,6 +36,14 @@ const DEFAULT_PROVIDER: ProviderId = "nvidia";
 const DEFAULT_NVIDIA_MODEL = "moonshotai/kimi-k2.5";
 const DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-4.6";
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 40;
+const NVIDIA_MODEL_ALIASES: Record<string, string> = {
+  "deepseek/deepseek-v4-pro": "deepseek-ai/deepseek-v4-flash",
+  "deepseek-ai/deepseek-v4-pro": "deepseek-ai/deepseek-v4-flash",
+  "deepseek-ai/deepseek-v3.2": "deepseek-ai/deepseek-v4-flash",
+};
+
+const normalizeNvidiaModel = (model: string): string =>
+  NVIDIA_MODEL_ALIASES[model] || model;
 
 const getEnvNumber = (name: string): number | null => {
   const raw = process.env[name];
@@ -108,7 +116,7 @@ const withDefaults = (config: PartialConfig): NvicodeConfig => {
   return {
     provider: config.provider === "openrouter" ? "openrouter" : DEFAULT_PROVIDER,
     nvidiaApiKey: config.nvidiaApiKey?.trim() || legacyApiKey,
-    nvidiaModel: config.nvidiaModel?.trim() || legacyModel,
+    nvidiaModel: normalizeNvidiaModel(config.nvidiaModel?.trim() || legacyModel),
     openrouterApiKey: config.openrouterApiKey?.trim() || "",
     openrouterModel: config.openrouterModel?.trim() || DEFAULT_OPENROUTER_MODEL,
     proxyPort:
