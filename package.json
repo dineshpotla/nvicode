@@ -1,13 +1,19 @@
 {
   "name": "nvicode",
-  "version": "0.1.20",
-  "description": "Route Claude Code, Codex CLI, and OpenClaw through NVIDIA or OpenRouter with one setup.",
+  "version": "0.1.22",
+  "description": "Route Claude Code, Codex CLI, Codex desktop app, and OpenClaw through NVIDIA, OpenRouter, TokenRouter, GMICLOUD, ClinePass, or xAI.",
   "author": "Dinesh Potla",
   "keywords": [
     "claude-code",
     "codex",
     "openclaw",
     "openrouter",
+    "openrouter-routing",
+    "tokenrouter",
+    "gmicloud",
+    "clinepass",
+    "xai",
+    "minimax",
     "nvidia",
     "kimi",
     "qwen",
@@ -23,6 +29,7 @@
     "build": "tsc -p tsconfig.json",
     "prepack": "npm run build",
     "postinstall": "node dist/postinstall.js",
+    "test": "npm run build && node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/cli.ts"
   },
@@ -47,7 +54,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.8",
-    "tsx": "^4.20.3",
+    "tsx": "^4.23.12",
     "typescript": "^5.8.2"
   }
 }

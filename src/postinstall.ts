@@ -169,7 +169,7 @@ const main = async (): Promise<void> => {
   }
 
   const config = await loadConfig();
-  if (config.nvidiaApiKey || config.openrouterApiKey) {
+  if (config.nvidiaApiKey || config.openrouterApiKey || config.tokenrouterApiKey) {
     console.log("nvicode is already configured. Run `nvicode select model` to change provider, key, or model.");
     return;
   }
