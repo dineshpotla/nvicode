@@ -1983,7 +1983,7 @@ const ensureClaudeSettingsEnvConfigured = async (
     ANTHROPIC_DEFAULT_OPUS_MODEL: model,
     ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
     ANTHROPIC_CUSTOM_MODEL_OPTION: model,
-    ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "nvicode custom model",
+    ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: model,
     ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION:
       `Claude Code via local ${getProviderLabel(config.provider)} gateway`,
     CLAUDE_CODE_SUBAGENT_MODEL: model,
@@ -1999,6 +1999,7 @@ const ensureClaudeSettingsEnvConfigured = async (
 
   const next = {
     ...parsed,
+    model,
     env: nextEnv,
   };
 
@@ -2343,7 +2344,7 @@ const runLaunchClaude = async (args: string[]): Promise<void> => {
     CLAUDE_CODE_SUBAGENT_MODEL: activeModel,
     CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
     ANTHROPIC_CUSTOM_MODEL_OPTION: activeModel,
-    ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "nvicode custom model",
+    ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: activeModel,
     ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION:
       `Claude Code via local ${getProviderLabel(config.provider)} gateway`,
     ...getClaudeContextEnv(config),

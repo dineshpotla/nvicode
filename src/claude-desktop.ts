@@ -230,7 +230,11 @@ const writeJsonIfChanged = async (
 const buildGatewayProfile = (
   config: ClaudeDesktopGatewayConfig,
 ): JsonObject => {
-  const profileName = config.profileName || NVICODE_CLAUDE_DESKTOP_PROFILE_NAME;
+  // Claude Desktop caps the deployment label at 60 characters. Keep the
+  // gateway model ID visible instead of falling back to its generic Default
+  // label, while retaining the full ID in inferenceModels.name.
+  const displayName =
+    config.model.length > 60 ? `${config.model.slice(0, 57)}...` : config.model;
   return {
     inferenceProvider: "gateway",
     inferenceCredentialKind: "static",
@@ -240,11 +244,12 @@ const buildGatewayProfile = (
     inferenceModels: [
       {
         name: config.model,
-        labelOverride: `${profileName} - ${config.model}`,
+        labelOverride: displayName,
         anthropicFamilyTier: "sonnet",
         isFamilyDefault: true,
       },
     ],
+    deploymentDisplayName: displayName,
     modelDiscoveryEnabled: false,
     chatTabEnabled: true,
     isClaudeCodeForDesktopEnabled: true,

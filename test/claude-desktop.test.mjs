@@ -56,9 +56,10 @@ test("configures a gateway profile without dropping existing profile fields", as
     assert.equal(profile.inferenceGatewayBaseUrl, "http://127.0.0.1:8788");
     assert.equal(profile.inferenceGatewayApiKey, "sk-ant-nvicode-test");
     assert.equal(profile.modelDiscoveryEnabled, false);
+    assert.equal(profile.deploymentDisplayName, "moonshotai/kimi-k2.6");
     assert.deepEqual(profile.inferenceModels[0], {
       name: "moonshotai/kimi-k2.6",
-      labelOverride: "Nvicode - moonshotai/kimi-k2.6",
+      labelOverride: "moonshotai/kimi-k2.6",
       anthropicFamilyTier: "sonnet",
       isFamilyDefault: true,
     });
@@ -72,6 +73,28 @@ test("configures a gateway profile without dropping existing profile fields", as
     const deployment = JSON.parse(await fs.readFile(paths.deploymentConfigFile, "utf8"));
     assert.equal(deployment.deploymentMode, "3p");
     assert.ok(await fs.stat(`${paths.profileFile}.nvicode.bak`));
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test("keeps long model IDs exact while capping Claude Desktop display labels", async () => {
+  const home = await makeTempHome();
+  try {
+    const paths = await configureClaudeDesktop(
+      {
+        baseUrl: "http://127.0.0.1:8788",
+        apiKey: "sk-ant-nvicode-test",
+        model: `provider/${"x".repeat(70)}`,
+      },
+      { platform: "linux", homeDirectory: home, env: {} },
+    );
+    const profile = JSON.parse(await fs.readFile(paths.paths.profileFile, "utf8"));
+    const model = profile.inferenceModels[0];
+    assert.equal(model.name, `provider/${"x".repeat(70)}`);
+    assert.equal(model.labelOverride.length, 60);
+    assert.equal(model.labelOverride.endsWith("..."), true);
+    assert.equal(profile.deploymentDisplayName, model.labelOverride);
   } finally {
     await fs.rm(home, { recursive: true, force: true });
   }

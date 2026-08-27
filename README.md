@@ -178,6 +178,7 @@ Behavior notes:
 - `nvicode select model` asks for provider, optional API key update, and model choice in one guided flow.
 - `nvicode launch claude-desktop` configures Claude Desktop's per-user 3P gateway profile. It does not change the persistent plain `claude` command; use `nvicode launch claude` for terminal Claude Code.
 - Claude Desktop's 3P profile uses the exact selected provider model ID and the local proxy token. Re-run `nvicode launch claude-desktop` after changing providers or models.
+- Claude Desktop shows the selected provider model ID in its deployment and model labels; Claude Code's persistent `model` setting is updated to the same ID.
 - If Claude Desktop is running, Nvicode asks before restarting it. If you decline, fully quit and reopen Claude Desktop to load the saved profile.
 - For NVIDIA, TokenRouter, and GMICLOUD, model selection fetches each router's own live `/models` catalog and ranks current coding-compatible entries first. xAI uses its live OpenAI-compatible model catalog; ClinePass uses its local supported-model list.
 - For OpenRouter, model selection fetches the live OpenRouter catalog with programming, text-output, and tool-calling filters. `Auto` shows current free endpoints first; a selected upstream route shows current models hosted by that route.
