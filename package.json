@@ -1,7 +1,7 @@
 {
   "name": "nvicode",
-  "version": "0.1.22",
-  "description": "Route Claude Code, Codex CLI, Codex desktop app, and OpenClaw through NVIDIA, OpenRouter, TokenRouter, GMICLOUD, ClinePass, or xAI.",
+  "version": "0.1.23",
+  "description": "Route Claude Code, Claude Desktop, Codex CLI, Codex desktop app, and OpenClaw through NVIDIA, OpenRouter, TokenRouter, GMICLOUD, ClinePass, or xAI.",
   "author": "Dinesh Potla",
   "keywords": [
     "claude-code",

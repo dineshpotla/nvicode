@@ -33,6 +33,17 @@ import {
   OPENROUTER_PROVIDER_ROUTES,
 } from "./openrouter.js";
 import {
+  configureClaudeDesktop,
+  findClaudeDesktopApp,
+  getClaudeDesktopPaths,
+  isClaudeDesktopRunning,
+  isClaudeDesktopSupported,
+  openClaudeDesktop,
+  restartClaudeDesktop,
+  restoreClaudeDesktop,
+  type ClaudeDesktopPaths,
+} from "./claude-desktop.js";
+import {
   filterRecordsSince,
   formatDuration,
   formatInteger,
@@ -60,8 +71,11 @@ Commands:
   nvicode activity              Show recent request activity
   nvicode dashboard             Show usage summary and recent activity
   nvicode launch claude [...]   Launch Claude Code through nvicode
+  nvicode launch claude-desktop   Launch Claude Desktop through nvicode
   nvicode launch openclaw [...] Launch OpenClaw through nvicode
   nvicode launch codex [...]    Launch Codex through nvicode
+  nvicode configure claude-desktop Configure Claude Desktop without opening it
+  nvicode restore claude-desktop Restore Claude Desktop's standard profile
   nvicode configure codex-app   Configure the Codex desktop app
   nvicode launch codex-app      Configure and open the Codex desktop app
   nvicode serve                 Run the local proxy in the foreground
@@ -2154,6 +2168,162 @@ const runLaunchCodexApp = async (args: string[]): Promise<void> => {
   });
 };
 
+const resolveClaudeDesktopApp = async (
+  paths: ClaudeDesktopPaths,
+): Promise<string | null> => {
+  const bundled = await findClaudeDesktopApp(paths);
+  if (bundled) {
+    return bundled;
+  }
+
+  const commandNames =
+    paths.platform === "win32"
+      ? ["Claude.exe", "claude.exe", "claude-desktop.exe"]
+      : ["claude-desktop"];
+  for (const name of commandNames) {
+    const found = await findExecutableInPath(name);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+};
+
+const applyClaudeDesktopAndOpen = async (
+  appPath: string,
+  apply: () => Promise<void>,
+  paths: ClaudeDesktopPaths,
+): Promise<void> => {
+  if (!(await isClaudeDesktopRunning(paths.platform))) {
+    await openClaudeDesktop(appPath, paths.platform);
+    return;
+  }
+
+  if (!process.stdin.isTTY) {
+    console.error(
+      "Claude Desktop is already running. Quit it completely and run `nvicode launch claude-desktop` again to reload the profile.",
+    );
+    return;
+  }
+
+  const answer = (
+    await question("Claude Desktop is running. Restart it now? [y/N]: ")
+  ).toLowerCase();
+  if (answer !== "y" && answer !== "yes") {
+    console.error(
+      "Profile saved. Quit and reopen Claude Desktop when you are ready to use nvicode.",
+    );
+    return;
+  }
+
+  await restartClaudeDesktop(appPath, apply, paths.platform);
+};
+
+const runConfigureClaudeDesktop = async (): Promise<void> => {
+  if (!isClaudeDesktopSupported(process.platform)) {
+    throw new Error(
+      "Claude Desktop third-party routing is supported on macOS, Windows, and Linux.",
+    );
+  }
+
+  const config = await ensureConfigured();
+  await ensureProxyRunning(config);
+  const result = await configureClaudeDesktop({
+    baseUrl: `http://127.0.0.1:${config.proxyPort}`,
+    apiKey: config.proxyToken,
+    model: getActiveModel(config),
+  });
+  console.log(
+    `${result.updated ? "Configured" : "Using"} Claude Desktop's 3P profile in ${result.paths.profileFile}.`,
+  );
+  console.log(`Claude Desktop model: ${result.model}`);
+  console.log(
+    "Fully quit and reopen Claude Desktop to load the profile, or run `nvicode launch claude-desktop`.",
+  );
+};
+
+const runRestoreClaudeDesktop = async (): Promise<void> => {
+  if (!isClaudeDesktopSupported(process.platform)) {
+    throw new Error(
+      "Claude Desktop third-party routing is supported on macOS, Windows, and Linux.",
+    );
+  }
+
+  const paths = getClaudeDesktopPaths();
+  const result = await restoreClaudeDesktop();
+  const appPath = await resolveClaudeDesktopApp(paths);
+  console.error(
+    `${result.updated ? "Restored" : "No Nvicode profile found for"} Claude Desktop's standard profile.`,
+  );
+
+  if (!appPath) {
+    console.error(
+      `Claude Desktop was not found. Reopen it manually after reviewing ${result.paths.profileRoot}.`,
+    );
+    return;
+  }
+
+  await applyClaudeDesktopAndOpen(
+    appPath,
+    async () => {
+      await restoreClaudeDesktop();
+    },
+    paths,
+  );
+};
+
+const runLaunchClaudeDesktop = async (args: string[]): Promise<void> => {
+  const launchArgs = normalizeLaunchArgs(args);
+  const restore = launchArgs.includes("--restore");
+  const unsupportedArgs = launchArgs.filter((arg) => arg !== "--restore");
+  if (unsupportedArgs.length > 0) {
+    throw new Error(
+      "`nvicode launch claude-desktop` does not accept app arguments. Use `--restore` to restore the standard profile.",
+    );
+  }
+  if (!isClaudeDesktopSupported(process.platform)) {
+    throw new Error(
+      "Claude Desktop third-party routing is supported on macOS, Windows, and Linux.",
+    );
+  }
+
+  const paths = getClaudeDesktopPaths();
+  const appPath = await resolveClaudeDesktopApp(paths);
+  if (!restore && !appPath) {
+    throw new Error(
+      "Unable to locate Claude Desktop. Install it first, then run `nvicode launch claude-desktop` again.",
+    );
+  }
+
+  if (restore) {
+    await runRestoreClaudeDesktop();
+    return;
+  }
+
+  const config = await ensureConfigured();
+  await ensureProxyRunning(config);
+  const apply = async (): Promise<void> => {
+    await configureClaudeDesktop({
+      baseUrl: `http://127.0.0.1:${config.proxyPort}`,
+      apiKey: config.proxyToken,
+      model: getActiveModel(config),
+    });
+  };
+  const result = await configureClaudeDesktop({
+    baseUrl: `http://127.0.0.1:${config.proxyPort}`,
+    apiKey: config.proxyToken,
+    model: getActiveModel(config),
+  });
+
+  console.error(
+    `${result.updated ? "Configured" : "Using"} Claude Desktop 3P routing for ${getActiveModel(config)} through ${getProviderLabel(config.provider)}.`,
+  );
+  if (!appPath) {
+    throw new Error("Unable to locate Claude Desktop application.");
+  }
+  await applyClaudeDesktopAndOpen(appPath, apply, paths);
+};
+
 const runLaunchClaude = async (args: string[]): Promise<void> => {
   const config = await ensureConfigured();
   const routingStatus = await ensurePersistentClaudeRouting().catch(() => "skipped" as const);
@@ -2298,9 +2468,23 @@ const main = async (): Promise<void> => {
     return;
   }
 
+  if (command === "configure" && rest[0] === "claude-desktop") {
+    await runConfigureClaudeDesktop();
+    return;
+  }
+
+  if (command === "restore" && rest[0] === "claude-desktop") {
+    await runRestoreClaudeDesktop();
+    return;
+  }
+
   if (command === "launch") {
     if (rest[0] === "claude") {
       await runLaunchClaude(rest.slice(1));
+      return;
+    }
+    if (rest[0] === "claude-desktop" || rest[0] === "desktop") {
+      await runLaunchClaudeDesktop(rest.slice(1));
       return;
     }
     if (rest[0] === "openclaw") {
@@ -2315,7 +2499,9 @@ const main = async (): Promise<void> => {
       await runLaunchCodexApp(rest.slice(1));
       return;
     }
-    throw new Error("Supported launch targets are `claude`, `openclaw`, `codex`, and `codex-app`.");
+    throw new Error(
+      "Supported launch targets are `claude`, `claude-desktop`, `openclaw`, `codex`, and `codex-app`.",
+    );
   }
 
   throw new Error(`Unknown command: ${command}`);

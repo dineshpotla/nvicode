@@ -13,6 +13,7 @@ Route Claude Code, Codex CLI, Codex desktop app, and OpenClaw through NVIDIA, Op
 What it gives you:
 - One guided setup flow for provider, key, and model
 - Claude Code support
+- Claude Desktop support through its third-party (3P) gateway mode
 - Codex CLI support
 - Codex desktop app support on macOS
 - OpenClaw support
@@ -48,6 +49,7 @@ Launch the tool you want:
 
 ```sh
 nvicode launch claude
+nvicode launch claude-desktop
 nvicode launch codex
 nvicode launch codex-app
 nvicode launch openclaw
@@ -64,6 +66,7 @@ Provider setup:
 
 What happens after first launch:
 - The first successful `nvicode launch claude` installs persistent plain `claude` routing.
+- `nvicode launch claude-desktop` configures Claude Desktop's local 3P profile and opens the app.
 - The first successful `nvicode launch codex` installs persistent plain `codex` routing.
 - `nvicode launch codex-app` configures and opens the Codex desktop app.
 - `nvicode launch openclaw` updates the default OpenClaw profile for the selected provider/model.
@@ -76,6 +79,18 @@ codex
 ```
 
 continues using your selected `nvicode` provider and model.
+
+Claude Desktop is configured separately because the desktop app does not read
+`ANTHROPIC_BASE_URL` or `~/.claude/settings.json` for gateway routing. Nvicode
+writes the selected model and local proxy credentials to Claude Desktop's
+`Claude-3p/configLibrary` profile, then opens the app. Run the command again
+after changing providers or models. This follows Anthropic's [Claude Desktop
+on 3P gateway configuration](https://claude.com/docs/third-party/claude-desktop/gateway).
+To return to the normal Anthropic profile:
+
+```sh
+nvicode launch claude-desktop --restore
+```
 
 ### OpenRouter provider routes
 
@@ -103,12 +118,23 @@ When a route is selected, `nvicode select model` asks OpenRouter for programming
 
 ![nvicode launch claude](https://raw.githubusercontent.com/dineshpotla/nvicode/main/assets/screenshots/launch.png)
 
+### Launch Claude Desktop
+
+```sh
+nvicode launch claude-desktop
+```
+
 ## How It Works
 
 - Claude Code:
   - uses a local Anthropic-compatible proxy on `127.0.0.1:8788`
   - the proxy translates Claude messages and tools to the selected router/model
   - Claude Code's auto-compaction window and the proxy's input trimming use the selected model's effective context budget
+- Claude Desktop:
+  - uses Claude Desktop's documented third-party gateway profile on the local machine
+  - sends Anthropic Messages API requests to the local `nvicode` proxy
+  - receives an explicit model entry for the exact selected provider model, so opaque NVIDIA/OpenRouter IDs are not rewritten
+  - keeps the desktop profile and proxy token separate from Claude Code's shell wrapper
 - Codex CLI:
   - uses the local `nvicode` proxy
   - `nvicode` configures Codex to talk to that proxy through the Responses API
@@ -131,6 +157,9 @@ Common commands:
 ```sh
 nvicode select model
 nvicode launch claude
+nvicode launch claude-desktop
+nvicode configure claude-desktop
+nvicode restore claude-desktop
 nvicode launch codex
 nvicode configure codex-app
 nvicode launch codex-app
@@ -147,6 +176,9 @@ nvicode launch codex "Explain this project"
 
 Behavior notes:
 - `nvicode select model` asks for provider, optional API key update, and model choice in one guided flow.
+- `nvicode launch claude-desktop` configures Claude Desktop's per-user 3P gateway profile. It does not change the persistent plain `claude` command; use `nvicode launch claude` for terminal Claude Code.
+- Claude Desktop's 3P profile uses the exact selected provider model ID and the local proxy token. Re-run `nvicode launch claude-desktop` after changing providers or models.
+- If Claude Desktop is running, Nvicode asks before restarting it. If you decline, fully quit and reopen Claude Desktop to load the saved profile.
 - For NVIDIA, TokenRouter, and GMICLOUD, model selection fetches each router's own live `/models` catalog and ranks current coding-compatible entries first. xAI uses its live OpenAI-compatible model catalog; ClinePass uses its local supported-model list.
 - For OpenRouter, model selection fetches the live OpenRouter catalog with programming, text-output, and tool-calling filters. `Auto` shows current free endpoints first; a selected upstream route shows current models hosted by that route.
 - For OpenRouter, `nvicode select model` also offers a live-checked upstream provider route. A selected route is sent as `only` with fallbacks disabled, so OpenRouter will not silently switch to another provider.
@@ -175,6 +207,7 @@ If your NVIDIA endpoint is not free, override local cost estimates with `NVICODE
 ## Requirements
 
 - Claude Code must already be installed to use `nvicode launch claude`.
+- Claude Desktop must already be installed to use `nvicode launch claude-desktop`. Anthropic documents 3P configuration for macOS, Windows, and Linux; Linux Claude Desktop is currently beta.
 - Codex must already be installed to use `nvicode launch codex`. Install with `npm install -g @openai/codex`.
 - Codex.app must already be installed on macOS to use `nvicode launch codex-app`.
 - OpenClaw must already be installed to use `nvicode launch openclaw`. Install with `npm install -g openclaw@latest`.

@@ -2341,14 +2341,18 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
 
       if (request.method === "GET" && url.pathname === "/v1/models") {
         const limits = getActiveModelLimits(config);
+        const activeModel = getActiveModel(config);
         sendJson(response, 200, {
           object: "list",
           data: [
             {
-              id: getActiveModel(config),
+              id: activeModel,
               object: "model",
               created: 0,
               owned_by: config.provider,
+              display_name: `Nvicode - ${activeModel}`,
+              anthropic_family_tier: "sonnet",
+              is_family_default: true,
               context_window: limits?.contextWindowTokens,
               max_output_tokens: limits?.maxOutputTokens,
             },
