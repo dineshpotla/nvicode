@@ -14,6 +14,9 @@ export type JsonObject = Record<string, unknown>;
 export const NVICODE_CLAUDE_DESKTOP_PROFILE_ID =
   "00000000-0000-4000-8000-000000000878";
 export const NVICODE_CLAUDE_DESKTOP_PROFILE_NAME = "Nvicode";
+// Claude Desktop validates configured gateway model IDs as Anthropic routes.
+// The proxy maps this compatibility route to the user's selected model.
+export const NVICODE_CLAUDE_DESKTOP_GATEWAY_MODEL_ID = "claude-sonnet-4-5";
 
 export interface ClaudeDesktopPaths {
   platform: ClaudeDesktopPlatform;
@@ -232,9 +235,10 @@ const buildGatewayProfile = (
 ): JsonObject => {
   // Claude Desktop caps the deployment label at 60 characters. Keep the
   // gateway model ID visible instead of falling back to its generic Default
-  // label, while retaining the full ID in inferenceModels.name.
+  // label, while retaining the full selected ID in the visible label.
   const displayName =
     config.model.length > 60 ? `${config.model.slice(0, 57)}...` : config.model;
+  const gatewayModel = NVICODE_CLAUDE_DESKTOP_GATEWAY_MODEL_ID;
   return {
     inferenceProvider: "gateway",
     inferenceCredentialKind: "static",
@@ -243,7 +247,7 @@ const buildGatewayProfile = (
     inferenceGatewayAuthScheme: "bearer",
     inferenceModels: [
       {
-        name: config.model,
+        name: gatewayModel,
         labelOverride: displayName,
         anthropicFamilyTier: "sonnet",
         isFamilyDefault: true,

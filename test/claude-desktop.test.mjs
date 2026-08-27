@@ -9,6 +9,7 @@ import {
   getClaudeDesktopPaths,
   restoreClaudeDesktop,
   NVICODE_CLAUDE_DESKTOP_PROFILE_ID,
+  NVICODE_CLAUDE_DESKTOP_GATEWAY_MODEL_ID,
 } from "../dist/claude-desktop.js";
 import { createProxyServer } from "../dist/proxy.js";
 
@@ -58,7 +59,7 @@ test("configures a gateway profile without dropping existing profile fields", as
     assert.equal(profile.modelDiscoveryEnabled, false);
     assert.equal(profile.deploymentDisplayName, "moonshotai/kimi-k2.6");
     assert.deepEqual(profile.inferenceModels[0], {
-      name: "moonshotai/kimi-k2.6",
+      name: NVICODE_CLAUDE_DESKTOP_GATEWAY_MODEL_ID,
       labelOverride: "moonshotai/kimi-k2.6",
       anthropicFamilyTier: "sonnet",
       isFamilyDefault: true,
@@ -91,7 +92,7 @@ test("keeps long model IDs exact while capping Claude Desktop display labels", a
     );
     const profile = JSON.parse(await fs.readFile(paths.paths.profileFile, "utf8"));
     const model = profile.inferenceModels[0];
-    assert.equal(model.name, `provider/${"x".repeat(70)}`);
+    assert.equal(model.name, NVICODE_CLAUDE_DESKTOP_GATEWAY_MODEL_ID);
     assert.equal(model.labelOverride.length, 60);
     assert.equal(model.labelOverride.endsWith("..."), true);
     assert.equal(profile.deploymentDisplayName, model.labelOverride);
@@ -162,8 +163,8 @@ test("advertises the selected model in the Anthropic-compatible model catalog", 
     });
     assert.equal(response.status, 200);
     const payload = await response.json();
-    assert.equal(payload.data[0].id, "moonshotai/kimi-k2.6");
-    assert.equal(payload.data[0].display_name, "Nvicode - moonshotai/kimi-k2.6");
+    assert.equal(payload.data[0].id, NVICODE_CLAUDE_DESKTOP_GATEWAY_MODEL_ID);
+    assert.equal(payload.data[0].display_name, "moonshotai/kimi-k2.6");
     assert.equal(payload.data[0].anthropic_family_tier, "sonnet");
   } finally {
     await new Promise((resolve) => server.close(resolve));

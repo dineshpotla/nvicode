@@ -962,7 +962,7 @@ const runDashboard = async (): Promise<void> => {
   await runActivity();
 };
 
-const PROXY_PROTOCOL_VERSION = 10;
+const PROXY_PROTOCOL_VERSION = 11;
 
 interface ProxyHealthResponse {
   ok?: boolean;

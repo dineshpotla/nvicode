@@ -16,6 +16,7 @@ import {
   getActiveModelLimits,
   type NvicodeConfig,
 } from "./config.js";
+import { NVICODE_CLAUDE_DESKTOP_GATEWAY_MODEL_ID } from "./claude-desktop.js";
 import { getOpenRouterProviderPreferences } from "./openrouter.js";
 
 interface AnthropicTextBlock {
@@ -229,7 +230,7 @@ const GROK_CLI_PROXY_URL = "https://cli-chat-proxy.grok.com/v1/chat/completions"
 const DEFAULT_RETRY_DELAY_MS = 2_000;
 const MAX_UPSTREAM_RETRIES = 3;
 const UPSTREAM_TIMEOUT_MS = 240_000;
-const PROXY_PROTOCOL_VERSION = 10;
+const PROXY_PROTOCOL_VERSION = 11;
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 const CONTEXT_ESTIMATE_SAFETY_RATIO = 0.95;
 
@@ -2346,11 +2347,11 @@ export const createProxyServer = (config: NvicodeConfig): Server => {
           object: "list",
           data: [
             {
-              id: activeModel,
+              id: NVICODE_CLAUDE_DESKTOP_GATEWAY_MODEL_ID,
               object: "model",
               created: 0,
               owned_by: config.provider,
-              display_name: `Nvicode - ${activeModel}`,
+              display_name: activeModel,
               anthropic_family_tier: "sonnet",
               is_family_default: true,
               context_window: limits?.contextWindowTokens,
