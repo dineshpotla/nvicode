@@ -1,4 +1,4 @@
-# Nvicode - Free unlimited claudecode 40RPM
+# Nvicode - One Private Gateway For All Your Harnesses 
 
 [![CI](https://github.com/dineshpotla/nvicode/actions/workflows/ci.yml/badge.svg)](https://github.com/dineshpotla/nvicode/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/nvicode)](https://www.npmjs.com/package/nvicode)
